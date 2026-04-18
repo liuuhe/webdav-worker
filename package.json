@@ -1,0 +1,28 @@
+{
+  "name": "cloudflare-webdav-worker",
+  "version": "0.1.0",
+  "description": "A Cloudflare Workers + R2 WebDAV service with a bilingual admin panel.",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "check": "wrangler deploy --dry-run"
+  },
+  "cloudflare": {
+    "bindings": {
+      "WEBDAV_BUCKET": {
+        "description": "R2 bucket used to store WebDAV files."
+      },
+      "WEBDAV_CONFIG": {
+        "description": "KV namespace used to store app metadata for the admin panel."
+      },
+      "ADMIN_TOKEN": {
+        "description": "Set a long random string for the admin panel URL, for example `manage/<ADMIN_TOKEN>`."
+      }
+    }
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250410.0",
+    "wrangler": "^4.60.0"
+  }
+}

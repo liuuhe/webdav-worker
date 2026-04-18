@@ -1,0 +1,23 @@
+{
+  "name": "cloudflare-webdav-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-18",
+  "r2_buckets": [
+    {
+      "binding": "WEBDAV_BUCKET",
+      "bucket_name": "cloudflare-webdav-storage"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "WEBDAV_CONFIG",
+      "id": "00000000000000000000000000000000",
+      "preview_id": "00000000000000000000000000000000"
+    }
+  ],
+  "secrets": {
+    "required": [
+      "ADMIN_TOKEN"
+    ]
+  }
+}
