@@ -11,19 +11,20 @@ A path-based WebDAV service built on Cloudflare Workers, R2, and KV, with a ligh
 - Fixed WebDAV URLs such as `https://webdav.example.com/obsidian-notes/`
 - One isolated storage prefix per app
 - Optional WebDAV Basic Auth per app
-- Lightweight admin panel at `https://<your-domain>/manage/<ADMIN_TOKEN>`
+- Lightweight admin panel at `https://<your-domain>/manage`
 - English-first bilingual admin UI with Chinese switching support
 - Works on Cloudflare Workers without running your own server
 
 ## Route Model
 
 - WebDAV endpoint: `https://<your-domain>/<app-path>/`
-- Admin panel: `https://<your-domain>/manage/<ADMIN_TOKEN>`
+- Admin panel: `https://<your-domain>/manage`
+- First-time setup: use `ADMIN_TOKEN` inside the setup form to create the permanent admin password
 
 Example:
 
 - `https://webdav.example.com/obsidian-notes/`
-- `https://webdav.example.com/manage/replace-with-a-long-random-token`
+- `https://webdav.example.com/manage`
 
 ## Stack
 
@@ -74,9 +75,9 @@ There are two practical ways to deploy this project.
 
 1. Click the Deploy to Cloudflare button above.
 2. Review the generated project and bindings in Cloudflare.
-3. Set `ADMIN_TOKEN` to a long random string.
+3. Set `ADMIN_TOKEN` to a long random string for first-time admin bootstrap.
 4. Deploy.
-5. Open `https://<workers-subdomain>/manage/<ADMIN_TOKEN>` and create your first app.
+5. Open `https://<workers-subdomain>/manage`, use `ADMIN_TOKEN` once to set the admin password, then create your first app.
 6. Attach a custom domain later if you do not want to use the default `workers.dev` hostname.
 
 ### Option B: Manual deployment with Wrangler
@@ -135,9 +136,9 @@ You can also add a custom domain route later under `routes`, for example:
 }
 ```
 
-#### 6. Set the admin token secret
+#### 6. Set the bootstrap token secret
 
-Use a long random string. It becomes part of the admin URL.
+Use a long random string. It is used once in the setup form at `/manage` to create the permanent admin password.
 
 ```powershell
 wrangler secret put ADMIN_TOKEN
@@ -153,11 +154,11 @@ npm run deploy
 
 If you are using the default Workers hostname:
 
-- `https://<your-worker>.<your-subdomain>.workers.dev/manage/<ADMIN_TOKEN>`
+- `https://<your-worker>.<your-subdomain>.workers.dev/manage`
 
 If you later attach a custom domain:
 
-- `https://webdav.example.com/manage/<ADMIN_TOKEN>`
+- `https://webdav.example.com/manage`
 
 ## Custom Domain Setup
 
@@ -177,10 +178,13 @@ Recommended pattern:
 
 After deployment, open:
 
-- `https://<your-domain>/manage/<ADMIN_TOKEN>`
+- `https://<your-domain>/manage`
 
 From the admin panel you can:
 
+- Complete first-time admin setup with `ADMIN_TOKEN`
+- Sign in with the admin password using a session cookie
+- Rotate the admin password later from the security section
 - Create apps
 - Assign a fixed app path
 - Assign a storage prefix

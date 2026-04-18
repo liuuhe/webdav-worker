@@ -2,11 +2,12 @@
   "name": "cloudflare-webdav-worker",
   "version": "0.1.0",
   "description": "A Cloudflare Workers + R2 WebDAV service with a bilingual admin panel.",
-  "private": true,
   "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "check": "wrangler deploy --dry-run"
+    "check": "npm run test && npm run typecheck && wrangler deploy --dry-run"
   },
   "cloudflare": {
     "bindings": {
@@ -17,12 +18,14 @@
         "description": "KV namespace used to store app metadata for the admin panel."
       },
       "ADMIN_TOKEN": {
-        "description": "Set a long random string for the admin panel URL, for example `manage/<ADMIN_TOKEN>`."
+        "description": "Bootstrap token used once at `/manage` to set the permanent admin password."
       }
     }
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250410.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4",
     "wrangler": "^4.60.0"
   }
 }

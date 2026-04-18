@@ -11,19 +11,20 @@
 - 固定路径式 WebDAV 地址，例如 `https://webdav.example.com/obsidian-notes/`
 - 每个应用使用独立存储目录
 - 每个应用可选开启 WebDAV Basic Auth
-- 管理后台地址为 `https://<你的域名>/manage/<ADMIN_TOKEN>`
+- 管理后台地址为 `https://<你的域名>/manage`
 - 后台支持中英双语，默认英文
 - 不需要自建服务器，直接运行在 Cloudflare Workers 上
 
 ## 路由模型
 
 - WebDAV 地址：`https://<你的域名>/<应用路径>/`
-- 管理后台：`https://<你的域名>/manage/<ADMIN_TOKEN>`
+- 管理后台：`https://<你的域名>/manage`
+- 首次初始化：在后台设置页中使用 `ADMIN_TOKEN` 创建正式管理员密码
 
 示例：
 
 - `https://webdav.example.com/obsidian-notes/`
-- `https://webdav.example.com/manage/replace-with-a-long-random-token`
+- `https://webdav.example.com/manage`
 
 ## 技术结构
 
@@ -74,9 +75,9 @@
 
 1. 点击上面的 Deploy to Cloudflare 按钮。
 2. 在 Cloudflare 里确认导入的项目和绑定。
-3. 设置一个足够长的 `ADMIN_TOKEN`。
+3. 设置一个足够长的 `ADMIN_TOKEN`，作为首次后台初始化的 bootstrap token。
 4. 完成部署。
-5. 打开 `https://<workers-默认域名>/manage/<ADMIN_TOKEN>`，创建第一个应用。
+5. 打开 `https://<workers-默认域名>/manage`，先用 `ADMIN_TOKEN` 设置管理员密码，再创建第一个应用。
 6. 如果不想使用 `workers.dev` 域名，再绑定自己的域名。
 
 ### 方案 B：使用 Wrangler 手动部署
@@ -135,9 +136,9 @@ wrangler kv namespace create WEBDAV_CONFIG --preview
 }
 ```
 
-#### 6. 设置后台 token
+#### 6. 设置 bootstrap token
 
-这个值建议使用足够长的随机字符串，它会直接出现在后台 URL 里。
+这个值建议使用足够长的随机字符串，它会在 `/manage` 的首次初始化表单里使用一次，用来设置正式管理员密码。
 
 ```powershell
 wrangler secret put ADMIN_TOKEN
@@ -153,11 +154,11 @@ npm run deploy
 
 如果你暂时使用默认的 Workers 域名：
 
-- `https://<你的-worker>.<你的-subdomain>.workers.dev/manage/<ADMIN_TOKEN>`
+- `https://<你的-worker>.<你的-subdomain>.workers.dev/manage`
 
 如果你后来绑定了自己的域名：
 
-- `https://webdav.example.com/manage/<ADMIN_TOKEN>`
+- `https://webdav.example.com/manage`
 
 ## 自定义域名
 
@@ -177,10 +178,13 @@ npm run deploy
 
 部署完成后，打开：
 
-- `https://<你的域名>/manage/<ADMIN_TOKEN>`
+- `https://<你的域名>/manage`
 
 在后台里你可以：
 
+- 用 `ADMIN_TOKEN` 完成首次管理员初始化
+- 使用管理员密码登录，并通过会话访问后台
+- 在安全设置里轮换管理员密码
 - 创建应用
 - 分配固定访问路径
 - 分配存储目录
