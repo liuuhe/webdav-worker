@@ -6,13 +6,6 @@
 
 基于 Cloudflare Workers、R2 和 KV 的路径式 WebDAV 服务，并带一个轻量管理后台，适合统一管理多个应用的同步目录。
 
-这个仓库已经按公开发布做过脱敏处理：
-
-- 不包含个人域名
-- 不包含真实 bucket 名称或 KV ID
-- 不包含任何部署密钥
-- `wrangler.jsonc` 里只保留可替换的占位配置
-
 ## 功能
 
 - 固定路径式 WebDAV 地址，例如 `https://webdav.example.com/obsidian-notes/`

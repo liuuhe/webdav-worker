@@ -6,13 +6,6 @@
 
 A path-based WebDAV service built on Cloudflare Workers, R2, and KV, with a lightweight admin panel for managing multiple apps from one place.
 
-This repository is intentionally sanitized for public use:
-
-- No personal domain names
-- No real bucket names or KV IDs
-- No deployment secrets
-- Only placeholder bindings in `wrangler.jsonc`
-
 ## Features
 
 - Fixed WebDAV URLs such as `https://webdav.example.com/obsidian-notes/`
