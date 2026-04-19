@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { hydrateAppRecord, saveApp, validateAppUniqueness } from "../src/app-store";
+import { hydrateAppRecord, listApps, saveApp, validateAppUniqueness } from "../src/app-store";
 import { normalizeAppInput } from "../src/app-validation";
 import { parseAdminRoute, parseAppRoute } from "../src/routes";
 import { hashPassword, sha256Hex, verifyPassword } from "../src/security";
@@ -95,6 +95,28 @@ describe("app storage", () => {
         rootPrefix: "secondary/",
       }),
     ).resolves.toBe("path_in_use");
+  });
+
+  it("lists apps across KV cursors", async () => {
+    const env = createEnv();
+
+    for (let index = 0; index < 1005; index += 1) {
+      await saveApp(env, {
+        id: `app-${index}`,
+        name: `App ${String(index).padStart(4, "0")}`,
+        slug: `app-${index}`,
+        rootPrefix: `apps/${index}/`,
+        notes: "",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      });
+    }
+
+    const apps = await listApps(env, "https://example.com");
+
+    expect(apps).toHaveLength(1005);
+    expect(apps[0]?.slug).toBe("app-0");
+    expect(apps[1004]?.slug).toBe("app-1004");
   });
 });
 

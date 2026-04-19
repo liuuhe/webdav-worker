@@ -1,24 +1,24 @@
 import {
   buildSessionCookie,
   changeAdminPassword,
-  clearFailedAdminLogins,
   clearSessionCookie,
   destroyAdminSession,
   getAdminSessionFromRequest,
-  isAdminLoginRateLimited,
-  isAdminConfigured,
-  recordFailedAdminLogin,
+  getAdminSessionState,
   setupAdminPassword,
   authenticateAdmin,
   validateCsrf,
 } from "./admin-auth";
-import { buildAppUrl, deleteAppRecord, getAppById, listApps, publicApp, saveApp, validateAppUniqueness } from "./app-store";
-import { normalizeAppInput, resolveAuthSettings } from "./app-validation";
+import {
+  buildAppUrl,
+  getAppById,
+  listApps,
+  publicApp,
+} from "./app-store";
+import { createAppWithCoordinator, deleteAppWithCoordinator, updateAppWithCoordinator } from "./config-coordinator";
 import { MANAGE_SEGMENT } from "./constants";
 import { adminErrorResponse, adminMethodNotAllowed, jsonResponse, redirectResponse } from "./http";
-import { renderAdminPage } from "./admin-ui";
-import { collectStorageKeys, deleteStorageKeysInBatches } from "./webdav";
-import type { AdminRoute, AppPayload, AppRecord, Env } from "./types";
+import type { AdminRoute, AppPayload, Env } from "./types";
 
 export async function handleAdminRequest(
   request: Request,
@@ -26,27 +26,15 @@ export async function handleAdminRequest(
   url: URL,
   route: AdminRoute,
 ): Promise<Response> {
-  if (route.subPath === "/") {
+  if (!route.subPath.startsWith("/api")) {
+    return serveAdminApp(request, env, url, route);
+  }
+
+  if (route.subPath === "/api/session") {
     if (request.method !== "GET") {
       return adminMethodNotAllowed();
     }
-
-    const session = await getAdminSessionFromRequest(env, request);
-    return new Response(
-      renderAdminPage(url.origin, {
-        authenticated: Boolean(session),
-        adminConfigured: await isAdminConfigured(env),
-        csrfToken: session?.csrfToken ?? "",
-        accessPath: `/${MANAGE_SEGMENT}`,
-      }),
-      {
-        status: 200,
-        headers: new Headers({
-          "Content-Type": "text/html; charset=utf-8",
-          "Cache-Control": "no-store",
-        }),
-      },
-    );
+    return handleSession(request, env);
   }
 
   if (route.subPath === "/api/setup") {
@@ -92,6 +80,8 @@ export async function handleAdminRequest(
   if (appMatch) {
     const appId = decodeURIComponent(appMatch[1] ?? "");
     switch (request.method) {
+      case "GET":
+        return handleGetApp(request, env, appId, url.origin);
       case "PUT":
         return handleUpdateApp(request, env, appId, url.origin);
       case "DELETE":
@@ -105,6 +95,36 @@ export async function handleAdminRequest(
     return redirectResponse(`/${MANAGE_SEGMENT}`);
   }
   return new Response("Not found.", { status: 404 });
+}
+
+async function serveAdminApp(request: Request, env: Env, url: URL, route: AdminRoute): Promise<Response> {
+  if (!env.ASSETS) {
+    return new Response("Admin assets are unavailable.", {
+      status: 503,
+      headers: new Headers({
+        "Cache-Control": "no-store",
+      }),
+    });
+  }
+
+  const assetPath = route.subPath === "/" ? `/${MANAGE_SEGMENT}/index.html` : url.pathname;
+  const assetUrl = new URL(assetPath, url);
+  const assetResponse = await env.ASSETS.fetch(new Request(assetUrl.toString(), request));
+
+  if (assetResponse.status !== 404 && route.subPath !== "/") {
+    return assetResponse;
+  }
+
+  if (route.subPath.startsWith("/assets/") || route.subPath.endsWith(".ico") || route.subPath.endsWith(".svg")) {
+    return assetResponse;
+  }
+
+  return env.ASSETS.fetch(new Request(new URL(`/${MANAGE_SEGMENT}/index.html`, url).toString(), request));
+}
+
+async function handleSession(request: Request, env: Env): Promise<Response> {
+  const session = await getAdminSessionState(env, request);
+  return jsonResponse(session);
 }
 
 async function handleSetup(request: Request, env: Env, url: URL): Promise<Response> {
@@ -130,26 +150,22 @@ async function handleSetup(request: Request, env: Env, url: URL): Promise<Respon
 }
 
 async function handleLogin(request: Request, env: Env, url: URL): Promise<Response> {
-  if (await isAdminLoginRateLimited(env, request)) {
-    return adminErrorResponse("too_many_attempts", 429);
-  }
-
   const payload = await readJson<{ password?: unknown }>(request);
   if (!payload) {
     return adminErrorResponse("invalid_json", 400);
   }
 
   const password = typeof payload.password === "string" ? payload.password : "";
-  const result = await authenticateAdmin(env, password);
+  const result = await authenticateAdmin(env, request, password);
   if (!result.ok) {
-    if (result.errorCode === "invalid_credentials") {
-      const rateLimited = await recordFailedAdminLogin(env, request);
-      return adminErrorResponse(rateLimited ? "too_many_attempts" : result.errorCode, rateLimited ? 429 : 401);
-    }
-    return adminErrorResponse(result.errorCode, result.errorCode === "setup_required" ? 409 : 401);
+    const status =
+      result.errorCode === "setup_required"
+        ? 409
+        : result.errorCode === "too_many_attempts"
+          ? 429
+          : 401;
+    return adminErrorResponse(result.errorCode, status);
   }
-
-  await clearFailedAdminLogins(env, request);
 
   return jsonResponse(
     { ok: true },
@@ -219,6 +235,22 @@ async function handleListApps(request: Request, env: Env, origin: string): Promi
   });
 }
 
+async function handleGetApp(request: Request, env: Env, appId: string, origin: string): Promise<Response> {
+  const session = await requireAdminSession(env, request);
+  if (session instanceof Response) {
+    return session;
+  }
+
+  const app = await getAppById(env, appId);
+  if (!app) {
+    return adminErrorResponse("app_not_found", 404);
+  }
+
+  return jsonResponse({
+    app: publicApp(app, origin),
+  });
+}
+
 async function handleCreateApp(request: Request, env: Env, origin: string): Promise<Response> {
   const session = await requireAdminSession(env, request);
   if (session instanceof Response) {
@@ -233,41 +265,15 @@ async function handleCreateApp(request: Request, env: Env, origin: string): Prom
     return adminErrorResponse("invalid_json", 400);
   }
 
-  const normalized = normalizeAppInput(payload);
-  if (!normalized.ok) {
-    return adminErrorResponse(normalized.errorCode, 400);
+  const result = await createAppWithCoordinator(env, payload);
+  if (!result.ok) {
+    return adminErrorResponse(result.errorCode, result.errorCode.endsWith("_in_use") ? 409 : 400);
   }
-
-  const authSettings = await resolveAuthSettings(payload, null);
-  if (!authSettings.ok) {
-    return adminErrorResponse(authSettings.errorCode, 400);
-  }
-
-  const timestamp = new Date().toISOString();
-  const record: AppRecord = {
-    id: crypto.randomUUID(),
-    name: normalized.name,
-    slug: normalized.slug,
-    rootPrefix: normalized.rootPrefix,
-    notes: normalized.notes,
-    authUsername: authSettings.authUsername,
-    passwordHash: authSettings.passwordHash,
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  };
-
-  const uniquenessError = await validateAppUniqueness(env, record);
-  if (uniquenessError) {
-    return adminErrorResponse(uniquenessError, 409);
-  }
-
-  await saveApp(env, record);
-  await ensureCollectionExists(env, record.rootPrefix);
 
   return jsonResponse(
     {
-      app: publicApp(record, origin),
-      createdUrl: buildAppUrl(origin, record.slug),
+      app: publicApp(result.app, origin),
+      createdUrl: buildAppUrl(origin, result.app.slug),
     },
     201,
   );
@@ -282,47 +288,19 @@ async function handleUpdateApp(request: Request, env: Env, appId: string, origin
     return adminErrorResponse("csrf_invalid", 403);
   }
 
-  const existing = await getAppById(env, appId);
-  if (!existing) {
-    return adminErrorResponse("app_not_found", 404);
-  }
-
   const payload = await readJson<AppPayload>(request);
   if (!payload) {
     return adminErrorResponse("invalid_json", 400);
   }
 
-  const normalized = normalizeAppInput(payload, existing);
-  if (!normalized.ok) {
-    return adminErrorResponse(normalized.errorCode, 400);
+  const result = await updateAppWithCoordinator(env, appId, payload);
+  if (!result.ok) {
+    const status = result.errorCode === "app_not_found" ? 404 : result.errorCode.endsWith("_in_use") ? 409 : 400;
+    return adminErrorResponse(result.errorCode, status);
   }
-
-  const authSettings = await resolveAuthSettings(payload, existing);
-  if (!authSettings.ok) {
-    return adminErrorResponse(authSettings.errorCode, 400);
-  }
-
-  const nextRecord: AppRecord = {
-    ...existing,
-    name: normalized.name,
-    slug: normalized.slug,
-    rootPrefix: normalized.rootPrefix,
-    notes: normalized.notes,
-    authUsername: authSettings.authUsername,
-    passwordHash: authSettings.passwordHash,
-    updatedAt: new Date().toISOString(),
-  };
-
-  const uniquenessError = await validateAppUniqueness(env, nextRecord, existing.id);
-  if (uniquenessError) {
-    return adminErrorResponse(uniquenessError, 409);
-  }
-
-  await saveApp(env, nextRecord, existing);
-  await ensureCollectionExists(env, nextRecord.rootPrefix);
 
   return jsonResponse({
-    app: publicApp(nextRecord, origin),
+    app: publicApp(result.app, origin),
   });
 }
 
@@ -335,24 +313,15 @@ async function handleDeleteApp(request: Request, env: Env, appId: string): Promi
     return adminErrorResponse("csrf_invalid", 403);
   }
 
-  const existing = await getAppById(env, appId);
-  if (!existing) {
-    return adminErrorResponse("app_not_found", 404);
-  }
-
   let purgeData = false;
   if ((request.headers.get("content-length") ?? "0") !== "0") {
     const payload = await readJson<{ purgeData?: unknown }>(request);
     purgeData = Boolean(payload?.purgeData);
   }
 
-  await deleteAppRecord(env, existing);
-
-  if (purgeData) {
-    const keys = await collectStorageKeys(env, existing.rootPrefix);
-    if (keys.length > 0) {
-      await deleteStorageKeysInBatches(env, keys);
-    }
+  const result = await deleteAppWithCoordinator(env, appId, purgeData);
+  if (!result.ok) {
+    return adminErrorResponse(result.errorCode, result.errorCode === "app_not_found" ? 404 : 400);
   }
 
   return jsonResponse({ ok: true });
@@ -371,13 +340,5 @@ async function readJson<T>(request: Request): Promise<T | null> {
     return (await request.json()) as T;
   } catch {
     return null;
-  }
-}
-
-async function ensureCollectionExists(env: Env, rootPrefix: string): Promise<void> {
-  const markerKey = `${rootPrefix.replace(/\/$/, "")}/.cf-webdav-dir`;
-  const existing = await env.WEBDAV_BUCKET.head(markerKey);
-  if (!existing) {
-    await env.WEBDAV_BUCKET.put(markerKey, "");
   }
 }

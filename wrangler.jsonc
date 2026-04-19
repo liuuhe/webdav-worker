@@ -2,6 +2,29 @@
   "name": "cloudflare-webdav-worker",
   "main": "src/index.ts",
   "compatibility_date": "2026-04-18",
+  "assets": {
+    "directory": "./admin-dist",
+    "binding": "ASSETS",
+    "run_worker_first": [
+      "/manage*"
+    ]
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "CONFIG_COORDINATOR",
+        "class_name": "ConfigCoordinator"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "ConfigCoordinator"
+      ]
+    }
+  ],
   "r2_buckets": [
     {
       "binding": "WEBDAV_BUCKET",

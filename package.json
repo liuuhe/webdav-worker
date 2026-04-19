@@ -4,10 +4,15 @@
   "description": "A Cloudflare Workers + R2 WebDAV service with a bilingual admin panel.",
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc --noEmit",
+    "typecheck:worker": "tsc --noEmit",
+    "typecheck:admin": "npm --prefix admin run typecheck",
+    "typecheck": "npm run typecheck:worker && npm run typecheck:admin",
+    "build:admin": "npm --prefix admin run build",
+    "build": "npm run build:admin",
     "dev": "wrangler dev",
+    "dev:admin": "npm --prefix admin run dev",
     "deploy": "wrangler deploy",
-    "check": "npm run test && npm run typecheck && wrangler deploy --dry-run"
+    "check": "npm run test && npm run typecheck && npm run build:admin && wrangler deploy --dry-run"
   },
   "cloudflare": {
     "bindings": {

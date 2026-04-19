@@ -32,16 +32,9 @@ async function bootstrapAdmin(env: ReturnType<typeof createEnv>, origin: string)
   expect(setupResponse.status).toBe(200);
 
   const sessionCookie = extractSessionCookie(setupResponse);
-  const adminPage = await worker.fetch(
-    new Request(origin + "/manage", {
-      headers: { Cookie: sessionCookie },
-    }),
-    env,
-  );
-
   return {
     sessionCookie,
-    csrfToken: extractCsrfToken(await adminPage.text()),
+    csrfToken: await extractCsrfToken(env, origin, sessionCookie),
   };
 }
 
@@ -78,6 +71,40 @@ function countXmlResponses(xml: string): number {
 }
 
 describe("worker integration", () => {
+  it("serves the admin shell and reports session state", async () => {
+    const env = createEnv();
+    const origin = "https://example.com";
+
+    const shellResponse = await worker.fetch(new Request(origin + "/manage"), env);
+    expect(shellResponse.status).toBe(200);
+    expect(await shellResponse.text()).toContain('<div id="root"></div>');
+
+    const anonymousSessionResponse = await worker.fetch(new Request(origin + "/manage/api/session"), env);
+    expect(anonymousSessionResponse.status).toBe(200);
+    expect(await anonymousSessionResponse.json()).toEqual({
+      authenticated: false,
+      adminConfigured: false,
+      csrfToken: "",
+    });
+
+    const { sessionCookie, csrfToken } = await bootstrapAdmin(env, origin);
+
+    const authenticatedSessionResponse = await worker.fetch(
+      new Request(origin + "/manage/api/session", {
+        headers: {
+          Cookie: sessionCookie,
+        },
+      }),
+      env,
+    );
+    expect(authenticatedSessionResponse.status).toBe(200);
+    expect(await authenticatedSessionResponse.json()).toEqual({
+      authenticated: true,
+      adminConfigured: true,
+      csrfToken,
+    });
+  });
+
   it("supports admin setup, app creation, and WebDAV CRUD/COPY/MOVE", async () => {
     const env = createEnv();
     const origin = "https://example.com";
@@ -191,15 +218,7 @@ describe("worker integration", () => {
     );
     expect(staleSessionResponse.status).toBe(401);
 
-    const rotatedAdminPage = await worker.fetch(
-      new Request(origin + "/manage", {
-        headers: {
-          Cookie: rotatedSessionCookie,
-        },
-      }),
-      env,
-    );
-    const rotatedCsrfToken = extractCsrfToken(await rotatedAdminPage.text());
+    const rotatedCsrfToken = await extractCsrfToken(env, origin, rotatedSessionCookie);
 
     const logoutResponse = await worker.fetch(
       new Request(origin + "/manage/api/logout", {

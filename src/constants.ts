@@ -1,4 +1,5 @@
 export const MANAGE_SEGMENT = "manage";
+export const CONFIG_COORDINATOR_NAME = "primary";
 export const APP_KEY_PREFIX = "app:";
 export const TOKEN_KEY_PREFIX = "token:";
 export const ROOT_PREFIX_KEY_PREFIX = "root:";
@@ -11,6 +12,7 @@ export const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
 export const LOGIN_ATTEMPT_LIMIT = 5;
 export const LOGIN_ATTEMPT_WINDOW_SECONDS = 15 * 60;
 export const LOCK_KEY_PREFIX = "lock:";
+export const REQUEST_ID_HEADER = "X-Request-Id";
 
 export const DAV_ALLOW = "OPTIONS, HEAD, GET, PUT, DELETE, MKCOL, COPY, MOVE, PROPFIND, LOCK, UNLOCK";
 export const DAV_HEADERS: HeadersInit = {

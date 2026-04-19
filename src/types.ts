@@ -1,6 +1,8 @@
 export interface Env {
   WEBDAV_BUCKET: R2Bucket;
   WEBDAV_CONFIG: KVNamespace;
+  CONFIG_COORDINATOR: DurableObjectNamespace;
+  ASSETS?: Fetcher;
   ADMIN_TOKEN?: string;
 }
 
@@ -58,6 +60,12 @@ export interface AdminConfigRecord {
   updatedAt: string;
 }
 
+export interface AdminSessionState {
+  authenticated: boolean;
+  adminConfigured: boolean;
+  csrfToken: string;
+}
+
 export interface AdminLoginAttemptRecord {
   count: number;
 }
@@ -88,6 +96,7 @@ export interface LockDetails {
 
 export type AdminErrorCode =
   | "invalid_json"
+  | "internal_error"
   | "app_not_found"
   | "path_in_use"
   | "storage_prefix_in_use"

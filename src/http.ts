@@ -26,6 +26,8 @@ export function adminErrorMessage(code: AdminErrorCode): string {
   switch (code) {
     case "invalid_json":
       return "The request body must be valid JSON.";
+    case "internal_error":
+      return "Internal server error.";
     case "app_not_found":
       return "App not found.";
     case "path_in_use":

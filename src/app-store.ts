@@ -6,9 +6,9 @@ import {
 import type { AdminErrorCode, AppRecord, Env, PublicApp } from "./types";
 
 export async function listApps(env: Env, origin: string): Promise<PublicApp[]> {
-  const listing = await env.WEBDAV_CONFIG.list({ prefix: APP_KEY_PREFIX });
+  const keys = await listAllKeys(env, APP_KEY_PREFIX);
   const apps = await Promise.all(
-    listing.keys.map(async (entry) => {
+    keys.map(async (entry) => {
       const raw = await env.WEBDAV_CONFIG.get<Record<string, unknown>>(entry.name, "json");
       const app = hydrateAppRecord(raw);
       return app ? publicApp(app, origin) : null;
@@ -122,4 +122,20 @@ export function hydrateAppRecord(raw: Record<string, unknown> | null): AppRecord
 
 export function buildAppUrl(origin: string, slug: string): string {
   return `${origin}/${slug}/`;
+}
+
+async function listAllKeys(env: Env, prefix: string): Promise<Array<{ name: string }>> {
+  const keys: Array<{ name: string }> = [];
+  let cursor: string | undefined;
+
+  do {
+    const listing = await env.WEBDAV_CONFIG.list({
+      prefix,
+      cursor,
+    } as KVNamespaceListOptions);
+    keys.push(...listing.keys);
+    cursor = listing.list_complete ? undefined : listing.cursor;
+  } while (cursor);
+
+  return keys;
 }
