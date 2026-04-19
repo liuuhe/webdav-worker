@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
+import { getAppById, saveApp } from "../src/app-store";
+import { ADMIN_CONFIG_KEY } from "../src/constants";
+import { sha256Hex } from "../src/security";
 import worker from "../src/index";
+import type { AppRecord } from "../src/types";
 import { createEnv, extractCsrfToken, extractSessionCookie } from "./mocks";
 
 const EXCLUSIVE_LOCK_BODY = `<?xml version="1.0" encoding="utf-8"?>
@@ -67,6 +71,10 @@ function extractLockToken(response: Response): string {
   const token = response.headers.get("Lock-Token");
   expect(token).toBeTruthy();
   return token!;
+}
+
+function countXmlResponses(xml: string): number {
+  return xml.match(/<d:response>/g)?.length ?? 0;
 }
 
 describe("worker integration", () => {
@@ -171,13 +179,34 @@ describe("worker integration", () => {
       env,
     );
     expect(rotateResponse.status).toBe(200);
+    const rotatedSessionCookie = extractSessionCookie(rotateResponse);
+
+    const staleSessionResponse = await worker.fetch(
+      new Request(origin + "/manage/api/apps", {
+        headers: {
+          Cookie: sessionCookie,
+        },
+      }),
+      env,
+    );
+    expect(staleSessionResponse.status).toBe(401);
+
+    const rotatedAdminPage = await worker.fetch(
+      new Request(origin + "/manage", {
+        headers: {
+          Cookie: rotatedSessionCookie,
+        },
+      }),
+      env,
+    );
+    const rotatedCsrfToken = extractCsrfToken(await rotatedAdminPage.text());
 
     const logoutResponse = await worker.fetch(
       new Request(origin + "/manage/api/logout", {
         method: "POST",
         headers: {
-          "X-CSRF-Token": csrfToken,
-          Cookie: sessionCookie,
+          "X-CSRF-Token": rotatedCsrfToken,
+          Cookie: rotatedSessionCookie,
         },
       }),
       env,
@@ -203,6 +232,105 @@ describe("worker integration", () => {
       env,
     );
     expect(nextLogin.status).toBe(200);
+  });
+
+  it("migrates legacy admin hashes and rate limits repeated failed logins", async () => {
+    const env = createEnv();
+    const origin = "https://example.com";
+
+    await env.WEBDAV_CONFIG.put(
+      ADMIN_CONFIG_KEY,
+      JSON.stringify({
+        passwordHash: await sha256Hex("legacy-pass"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+
+    const migratedLogin = await worker.fetch(
+      new Request(origin + "/manage/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: "legacy-pass" }),
+      }),
+      env,
+    );
+    expect(migratedLogin.status).toBe(200);
+
+    const adminConfig = await env.WEBDAV_CONFIG.get<{ passwordHash: string }>(ADMIN_CONFIG_KEY, "json");
+    expect(adminConfig?.passwordHash).toMatch(/^pbkdf2_sha256\$/);
+
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
+      const failedLogin = await worker.fetch(
+        new Request(origin + "/manage/api/login", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "CF-Connecting-IP": "198.51.100.10",
+          },
+          body: JSON.stringify({ password: "wrong-pass" }),
+        }),
+        env,
+      );
+      expect(failedLogin.status).toBe(attempt === 5 ? 429 : 401);
+    }
+
+    const blockedLogin = await worker.fetch(
+      new Request(origin + "/manage/api/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "CF-Connecting-IP": "198.51.100.10",
+        },
+        body: JSON.stringify({ password: "legacy-pass" }),
+      }),
+      env,
+    );
+    expect(blockedLogin.status).toBe(429);
+
+    const otherClientLogin = await worker.fetch(
+      new Request(origin + "/manage/api/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "CF-Connecting-IP": "198.51.100.11",
+        },
+        body: JSON.stringify({ password: "legacy-pass" }),
+      }),
+      env,
+    );
+    expect(otherClientLogin.status).toBe(200);
+  });
+
+  it("migrates legacy app auth hashes after a successful request", async () => {
+    const env = createEnv();
+    const origin = "https://example.com";
+    const record: AppRecord = {
+      id: "legacy-app",
+      name: "Legacy Secure Notes",
+      slug: "legacy-secure",
+      rootPrefix: "legacy-secure/",
+      notes: "",
+      authUsername: "alice",
+      passwordHash: await sha256Hex("secret-pass"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+
+    await saveApp(env, record);
+
+    const response = await worker.fetch(
+      new Request(origin + "/legacy-secure/", {
+        headers: {
+          Authorization: "Basic " + btoa("alice:secret-pass"),
+        },
+      }),
+      env,
+    );
+    expect(response.status).toBe(200);
+
+    const migratedRecord = await getAppById(env, record.id);
+    expect(migratedRecord?.passwordHash).toMatch(/^pbkdf2_sha256\$/);
   });
 
   it("supports LOCK, MOVE with lock tokens, and UNLOCK", async () => {
@@ -410,5 +538,343 @@ describe("worker integration", () => {
       env,
     );
     expect(deleteResponse.status).toBe(204);
+  });
+
+  it("supports PROPFIND depth variants and preserves GET/HEAD metadata", async () => {
+    const env = createEnv();
+    const origin = "https://example.com";
+    const { sessionCookie, csrfToken } = await bootstrapAdmin(env, origin);
+
+    await createApp(env, origin, sessionCookie, csrfToken, {
+      name: "Reference Notes",
+      slug: "reference",
+      rootPrefix: "reference/",
+    });
+
+    expect(await worker.fetch(new Request(origin + "/reference/docs/", { method: "MKCOL" }), env).then((response) => response.status)).toBe(201);
+    expect(
+      await worker.fetch(new Request(origin + "/reference/docs/archive/", { method: "MKCOL" }), env).then((response) => response.status),
+    ).toBe(201);
+
+    const readmeBody = "# hello\n";
+    const putReadme = await worker.fetch(
+      new Request(origin + "/reference/docs/readme.md", {
+        method: "PUT",
+        body: readmeBody,
+        headers: { "Content-Type": "text/markdown" },
+      }),
+      env,
+    );
+    expect(putReadme.status).toBe(201);
+
+    const putArchive = await worker.fetch(
+      new Request(origin + "/reference/docs/archive/old.md", {
+        method: "PUT",
+        body: "old",
+        headers: { "Content-Type": "text/markdown" },
+      }),
+      env,
+    );
+    expect(putArchive.status).toBe(201);
+
+    const getResponse = await worker.fetch(new Request(origin + "/reference/docs/readme.md"), env);
+    expect(getResponse.status).toBe(200);
+    expect(await getResponse.text()).toBe(readmeBody);
+
+    const headResponse = await worker.fetch(
+      new Request(origin + "/reference/docs/readme.md", {
+        method: "HEAD",
+      }),
+      env,
+    );
+    expect(headResponse.status).toBe(200);
+    expect(headResponse.headers.get("ETag")).toBe(getResponse.headers.get("ETag"));
+    expect(headResponse.headers.get("Content-Type")).toBe(getResponse.headers.get("Content-Type"));
+    expect(headResponse.headers.get("Content-Length")).toBe(String(readmeBody.length));
+
+    const depthZero = await worker.fetch(
+      new Request(origin + "/reference/docs/", {
+        method: "PROPFIND",
+        headers: { Depth: "0" },
+      }),
+      env,
+    );
+    expect(depthZero.status).toBe(207);
+    const depthZeroBody = await depthZero.text();
+    expect(countXmlResponses(depthZeroBody)).toBe(1);
+
+    const depthOne = await worker.fetch(
+      new Request(origin + "/reference/docs/", {
+        method: "PROPFIND",
+        headers: { Depth: "1" },
+      }),
+      env,
+    );
+    expect(depthOne.status).toBe(207);
+    const depthOneBody = await depthOne.text();
+    expect(countXmlResponses(depthOneBody)).toBe(3);
+    expect(depthOneBody).toContain("/reference/docs/archive/");
+    expect(depthOneBody).toContain("/reference/docs/readme.md");
+    expect(depthOneBody).not.toContain("/reference/docs/archive/old.md");
+
+    const depthInfinity = await worker.fetch(
+      new Request(origin + "/reference/docs/", {
+        method: "PROPFIND",
+        headers: { Depth: "infinity" },
+      }),
+      env,
+    );
+    expect(depthInfinity.status).toBe(207);
+    const depthInfinityBody = await depthInfinity.text();
+    expect(countXmlResponses(depthInfinityBody)).toBe(4);
+    expect(depthInfinityBody).toContain("/reference/docs/archive/old.md");
+
+    const invalidDepth = await worker.fetch(
+      new Request(origin + "/reference/docs/", {
+        method: "PROPFIND",
+        headers: { Depth: "banana" },
+      }),
+      env,
+    );
+    expect(invalidDepth.status).toBe(400);
+  });
+
+  it("enforces overwrite and destination parent checks for copy and move", async () => {
+    const env = createEnv();
+    const origin = "https://example.com";
+    const { sessionCookie, csrfToken } = await bootstrapAdmin(env, origin);
+
+    await createApp(env, origin, sessionCookie, csrfToken, {
+      name: "Moves",
+      slug: "moves",
+      rootPrefix: "moves/",
+    });
+
+    expect(await worker.fetch(new Request(origin + "/moves/docs/", { method: "MKCOL" }), env).then((response) => response.status)).toBe(201);
+    expect(
+      await worker.fetch(
+        new Request(origin + "/moves/docs/file.txt", {
+          method: "PUT",
+          body: "file",
+          headers: { "Content-Type": "text/plain" },
+        }),
+        env,
+      ).then((response) => response.status),
+    ).toBe(201);
+    expect(
+      await worker.fetch(
+        new Request(origin + "/moves/docs/existing.txt", {
+          method: "PUT",
+          body: "existing",
+          headers: { "Content-Type": "text/plain" },
+        }),
+        env,
+      ).then((response) => response.status),
+    ).toBe(201);
+
+    const blockedCopy = await worker.fetch(
+      new Request(origin + "/moves/docs/file.txt", {
+        method: "COPY",
+        headers: {
+          Destination: origin + "/moves/docs/existing.txt",
+          Overwrite: "F",
+        },
+      }),
+      env,
+    );
+    expect(blockedCopy.status).toBe(412);
+
+    const blockedCopyParent = await worker.fetch(
+      new Request(origin + "/moves/docs/file.txt", {
+        method: "COPY",
+        headers: {
+          Destination: origin + "/moves/missing/file.txt",
+        },
+      }),
+      env,
+    );
+    expect(blockedCopyParent.status).toBe(409);
+
+    const blockedMoveParent = await worker.fetch(
+      new Request(origin + "/moves/docs/file.txt", {
+        method: "MOVE",
+        headers: {
+          Destination: origin + "/moves/missing/file.txt",
+        },
+      }),
+      env,
+    );
+    expect(blockedMoveParent.status).toBe(409);
+  });
+
+  it("blocks recursive deletes for locked descendants and keeps descendant locks on move", async () => {
+    const env = createEnv();
+    const origin = "https://example.com";
+    const { sessionCookie, csrfToken } = await bootstrapAdmin(env, origin);
+
+    await createApp(env, origin, sessionCookie, csrfToken, {
+      name: "Locked Tree",
+      slug: "locked-tree",
+      rootPrefix: "locked-tree/",
+    });
+
+    expect(await worker.fetch(new Request(origin + "/locked-tree/docs/", { method: "MKCOL" }), env).then((response) => response.status)).toBe(201);
+    expect(await worker.fetch(new Request(origin + "/locked-tree/docs/sub/", { method: "MKCOL" }), env).then((response) => response.status)).toBe(201);
+    expect(
+      await worker.fetch(
+        new Request(origin + "/locked-tree/docs/sub/file.txt", {
+          method: "PUT",
+          body: "draft",
+          headers: { "Content-Type": "text/plain" },
+        }),
+        env,
+      ).then((response) => response.status),
+    ).toBe(201);
+
+    const lockResponse = await worker.fetch(
+      new Request(origin + "/locked-tree/docs/sub/file.txt", {
+        method: "LOCK",
+        headers: {
+          "Content-Type": 'application/xml; charset="utf-8"',
+          Timeout: "Second-600",
+        },
+        body: EXCLUSIVE_LOCK_BODY,
+      }),
+      env,
+    );
+    expect(lockResponse.status).toBe(200);
+    const lockToken = extractLockToken(lockResponse);
+
+    const blockedDelete = await worker.fetch(
+      new Request(origin + "/locked-tree/docs/", {
+        method: "DELETE",
+      }),
+      env,
+    );
+    expect(blockedDelete.status).toBe(423);
+
+    const blockedMove = await worker.fetch(
+      new Request(origin + "/locked-tree/docs/", {
+        method: "MOVE",
+        headers: {
+          Destination: origin + "/locked-tree/docs-renamed/",
+        },
+      }),
+      env,
+    );
+    expect(blockedMove.status).toBe(423);
+
+    const movedCollection = await worker.fetch(
+      new Request(origin + "/locked-tree/docs/", {
+        method: "MOVE",
+        headers: {
+          Destination: origin + "/locked-tree/docs-renamed/",
+          If: `(${lockToken})`,
+        },
+      }),
+      env,
+    );
+    expect([201, 204]).toContain(movedCollection.status);
+
+    const blockedPut = await worker.fetch(
+      new Request(origin + "/locked-tree/docs-renamed/sub/file.txt", {
+        method: "PUT",
+        body: "updated",
+        headers: { "Content-Type": "text/plain" },
+      }),
+      env,
+    );
+    expect(blockedPut.status).toBe(423);
+
+    const movedPropfind = await worker.fetch(
+      new Request(origin + "/locked-tree/docs-renamed/sub/file.txt", {
+        method: "PROPFIND",
+        headers: { Depth: "0" },
+      }),
+      env,
+    );
+    expect(movedPropfind.status).toBe(207);
+    expect(await movedPropfind.text()).toContain(lockToken.replace(/^<|>$/g, ""));
+
+    const unlockResponse = await worker.fetch(
+      new Request(origin + "/locked-tree/docs-renamed/sub/file.txt", {
+        method: "UNLOCK",
+        headers: {
+          "Lock-Token": lockToken,
+        },
+      }),
+      env,
+    );
+    expect(unlockResponse.status).toBe(204);
+
+    const deleteResponse = await worker.fetch(
+      new Request(origin + "/locked-tree/docs-renamed/", {
+        method: "DELETE",
+      }),
+      env,
+    );
+    expect(deleteResponse.status).toBe(204);
+  });
+
+  it("does not copy lock state to copied resources", async () => {
+    const env = createEnv();
+    const origin = "https://example.com";
+    const { sessionCookie, csrfToken } = await bootstrapAdmin(env, origin);
+
+    await createApp(env, origin, sessionCookie, csrfToken, {
+      name: "Copies",
+      slug: "copies",
+      rootPrefix: "copies/",
+    });
+
+    expect(await worker.fetch(new Request(origin + "/copies/file.txt", {
+      method: "PUT",
+      body: "draft",
+      headers: { "Content-Type": "text/plain" },
+    }), env).then((response) => response.status)).toBe(201);
+
+    const lockResponse = await worker.fetch(
+      new Request(origin + "/copies/file.txt", {
+        method: "LOCK",
+        headers: {
+          "Content-Type": 'application/xml; charset="utf-8"',
+        },
+        body: EXCLUSIVE_LOCK_BODY,
+      }),
+      env,
+    );
+    expect(lockResponse.status).toBe(200);
+    const lockToken = extractLockToken(lockResponse);
+
+    const copyResponse = await worker.fetch(
+      new Request(origin + "/copies/file.txt", {
+        method: "COPY",
+        headers: {
+          Destination: origin + "/copies/file-copy.txt",
+        },
+      }),
+      env,
+    );
+    expect(copyResponse.status).toBe(201);
+
+    const copiedPropfind = await worker.fetch(
+      new Request(origin + "/copies/file-copy.txt", {
+        method: "PROPFIND",
+        headers: { Depth: "0" },
+      }),
+      env,
+    );
+    expect(copiedPropfind.status).toBe(207);
+    expect(await copiedPropfind.text()).not.toContain(lockToken.replace(/^<|>$/g, ""));
+
+    const copiedPut = await worker.fetch(
+      new Request(origin + "/copies/file-copy.txt", {
+        method: "PUT",
+        body: "copied-update",
+        headers: { "Content-Type": "text/plain" },
+      }),
+      env,
+    );
+    expect(copiedPut.status).toBe(204);
   });
 });

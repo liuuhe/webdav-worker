@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { hydrateAppRecord, saveApp, validateAppUniqueness } from "../src/app-store";
 import { normalizeAppInput } from "../src/app-validation";
 import { parseAdminRoute, parseAppRoute } from "../src/routes";
+import { hashPassword, sha256Hex, verifyPassword } from "../src/security";
 import { determineLockDepth, extractLockOwner, normalizeLockToken, parseTimeout } from "../src/webdav-locks";
 import type { AppRecord } from "../src/types";
 import { createEnv } from "./mocks";
@@ -94,6 +95,28 @@ describe("app storage", () => {
         rootPrefix: "secondary/",
       }),
     ).resolves.toBe("path_in_use");
+  });
+});
+
+describe("password hashing", () => {
+  it("verifies modern hashes without forcing a rehash", async () => {
+    const hash = await hashPassword("secret-pass");
+    const verification = await verifyPassword("secret-pass", hash);
+
+    expect(verification.ok).toBe(true);
+    if (verification.ok) {
+      expect(verification.upgradedHash).toBeUndefined();
+    }
+  });
+
+  it("accepts legacy hashes and returns an upgraded hash", async () => {
+    const legacyHash = await sha256Hex("legacy-pass");
+    const verification = await verifyPassword("legacy-pass", legacyHash);
+
+    expect(verification.ok).toBe(true);
+    if (verification.ok) {
+      expect(verification.upgradedHash).toMatch(/^pbkdf2_sha256\$/);
+    }
   });
 });
 

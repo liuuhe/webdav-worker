@@ -72,11 +72,15 @@ export function adminErrorMessage(code: AdminErrorCode): string {
       return "A new admin password is required.";
     case "bootstrap_token_invalid":
       return "The bootstrap token is invalid.";
+    case "too_many_attempts":
+      return "Too many failed login attempts. Try again later.";
     case "admin_session_required":
       return "Admin authentication is required.";
     case "csrf_invalid":
       return "The CSRF token is invalid.";
   }
+
+  return "Unknown admin error.";
 }
 
 export function adminMethodNotAllowed(): Response {

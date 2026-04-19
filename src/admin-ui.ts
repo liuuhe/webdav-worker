@@ -575,6 +575,7 @@ export function renderAdminPage(origin: string, state: AdminPageState): string {
           current_password_invalid: "Current admin password is incorrect.",
           new_password_required: "A new admin password is required.",
           bootstrap_token_invalid: "The bootstrap token is invalid.",
+          too_many_attempts: "Too many failed login attempts. Try again later.",
           admin_session_required: "Admin authentication is required.",
           csrf_invalid: "The CSRF token is invalid."
         }
@@ -680,6 +681,7 @@ export function renderAdminPage(origin: string, state: AdminPageState): string {
           current_password_invalid: "当前管理员密码不正确。",
           new_password_required: "必须填写新密码。",
           bootstrap_token_invalid: "Bootstrap Token 不正确。",
+          too_many_attempts: "登录失败次数过多，请稍后再试。",
           admin_session_required: "需要先进行管理员登录。",
           csrf_invalid: "CSRF Token 无效。"
         }

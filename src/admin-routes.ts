@@ -1,10 +1,13 @@
 import {
   buildSessionCookie,
   changeAdminPassword,
+  clearFailedAdminLogins,
   clearSessionCookie,
   destroyAdminSession,
   getAdminSessionFromRequest,
+  isAdminLoginRateLimited,
   isAdminConfigured,
+  recordFailedAdminLogin,
   setupAdminPassword,
   authenticateAdmin,
   validateCsrf,
@@ -71,7 +74,7 @@ export async function handleAdminRequest(
     if (request.method !== "POST") {
       return adminMethodNotAllowed();
     }
-    return handlePasswordChange(request, env);
+    return handlePasswordChange(request, env, url);
   }
 
   if (route.subPath === "/api/apps") {
@@ -127,6 +130,10 @@ async function handleSetup(request: Request, env: Env, url: URL): Promise<Respon
 }
 
 async function handleLogin(request: Request, env: Env, url: URL): Promise<Response> {
+  if (await isAdminLoginRateLimited(env, request)) {
+    return adminErrorResponse("too_many_attempts", 429);
+  }
+
   const payload = await readJson<{ password?: unknown }>(request);
   if (!payload) {
     return adminErrorResponse("invalid_json", 400);
@@ -135,8 +142,14 @@ async function handleLogin(request: Request, env: Env, url: URL): Promise<Respon
   const password = typeof payload.password === "string" ? payload.password : "";
   const result = await authenticateAdmin(env, password);
   if (!result.ok) {
+    if (result.errorCode === "invalid_credentials") {
+      const rateLimited = await recordFailedAdminLogin(env, request);
+      return adminErrorResponse(rateLimited ? "too_many_attempts" : result.errorCode, rateLimited ? 429 : 401);
+    }
     return adminErrorResponse(result.errorCode, result.errorCode === "setup_required" ? 409 : 401);
   }
+
+  await clearFailedAdminLogins(env, request);
 
   return jsonResponse(
     { ok: true },
@@ -165,7 +178,7 @@ async function handleLogout(request: Request, env: Env, url: URL): Promise<Respo
   );
 }
 
-async function handlePasswordChange(request: Request, env: Env): Promise<Response> {
+async function handlePasswordChange(request: Request, env: Env, url: URL): Promise<Response> {
   const session = await requireAdminSession(env, request);
   if (session instanceof Response) {
     return session;
@@ -186,7 +199,13 @@ async function handlePasswordChange(request: Request, env: Env): Promise<Respons
     return adminErrorResponse(result.errorCode, 400);
   }
 
-  return jsonResponse({ ok: true });
+  return jsonResponse(
+    { ok: true },
+    200,
+    {
+      "Set-Cookie": buildSessionCookie(url, result.session),
+    },
+  );
 }
 
 async function handleListApps(request: Request, env: Env, origin: string): Promise<Response> {

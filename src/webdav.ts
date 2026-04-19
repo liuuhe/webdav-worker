@@ -1,5 +1,4 @@
 import { DAV_HEADERS, DIRECTORY_MARKER } from "./constants";
-import { isAuthorizedForApp, unauthorizedWebDav } from "./security";
 import {
   assertLockPermission,
   assertRecursiveDeletePermission,
@@ -24,10 +23,6 @@ export async function handleWebDavRequest(
   access: AppAccess,
   logicalPath: string,
 ): Promise<Response> {
-  if (!(await isAuthorizedForApp(request, access))) {
-    return unauthorizedWebDav(access.appName);
-  }
-
   switch (request.method) {
     case "OPTIONS":
       return new Response(null, { status: 204, headers: baseHeaders() });
@@ -415,7 +410,10 @@ async function handleCopyMove(
   }
 
   if (request.method === "MOVE") {
-    const sourceLockResponse = await assertLockPermission(env, access, source.key, request);
+    const sourceLockResponse =
+      source.kind === "collection"
+        ? await assertRecursiveDeletePermission(env, access, source.key, request)
+        : await assertLockPermission(env, access, source.key, request);
     if (sourceLockResponse) {
       return sourceLockResponse;
     }
@@ -492,41 +490,16 @@ async function handlePropfind(
     return new Response("Not found.", { status: 404, headers: baseHeaders() });
   }
 
-  const depth = normalizeDepth(request.headers.get("depth"));
+  const depth = normalizePropfindDepth(request.headers.get("depth"));
+  if (depth === null) {
+    return new Response("Bad Request.", { status: 400, headers: baseHeaders() });
+  }
+
   const responses: string[] = [await buildPropfindResponse(env, url.origin, access.basePath, access, resource)];
 
-  if (resource.kind === "collection" && depth > 0) {
-    const listing = await env.WEBDAV_BUCKET.list({
-      prefix: logicalCollectionToStoragePrefix(access, resource.key),
-      delimiter: "/",
-      limit: 1000,
-    });
-
-    for (const childPrefix of listing.delimitedPrefixes) {
-      const key = collectionPrefix(storageToLogicalKey(access, childPrefix));
-      if (!resource.key || key !== resource.key) {
-        responses.push(
-          await buildPropfindResponse(env, url.origin, access.basePath, access, {
-            kind: "collection",
-            key,
-            marker: null,
-          }),
-        );
-      }
-    }
-
-    for (const object of listing.objects) {
-      const logicalKey = storageToLogicalKey(access, object.key);
-      if (isDirectoryMarker(logicalKey) || logicalKey === stripTrailingSlash(resource.key)) {
-        continue;
-      }
-      responses.push(
-        await buildPropfindResponse(env, url.origin, access.basePath, access, {
-          kind: "file",
-          key: logicalKey,
-          object,
-        }),
-      );
+  if (resource.kind === "collection" && depth !== 0) {
+    for (const descendant of await listPropfindDescendants(env, access, resource.key, depth)) {
+      responses.push(await buildPropfindResponse(env, url.origin, access.basePath, access, descendant));
     }
   }
 
@@ -542,8 +515,22 @@ async function handlePropfind(
   });
 }
 
-function normalizeDepth(depthHeader: string | null): 0 | 1 {
-  return depthHeader === "0" ? 0 : 1;
+function normalizePropfindDepth(depthHeader: string | null): 0 | 1 | "infinity" | null {
+  if (depthHeader === null) {
+    return 1;
+  }
+
+  const normalized = depthHeader.trim().toLowerCase();
+  if (normalized === "0") {
+    return 0;
+  }
+  if (normalized === "1") {
+    return 1;
+  }
+  if (normalized === "infinity") {
+    return "infinity";
+  }
+  return null;
 }
 
 async function buildPropfindResponse(
@@ -591,6 +578,127 @@ function displayName(key: string): string {
   const clean = stripTrailingSlash(key);
   const parts = clean.split("/");
   return parts[parts.length - 1] ?? clean;
+}
+
+async function listPropfindDescendants(
+  env: Env,
+  access: AppAccess,
+  resourceKey: string,
+  depth: 1 | "infinity",
+): Promise<Resource[]> {
+  const resources = new Map<string, Resource>();
+  let cursor: string | undefined;
+
+  do {
+    const listing = await env.WEBDAV_BUCKET.list({
+      prefix: logicalCollectionToStoragePrefix(access, resourceKey),
+      cursor,
+      limit: 1000,
+    });
+
+    for (const object of listing.objects) {
+      const logicalKey = storageToLogicalKey(access, object.key);
+      if (isDirectoryMarker(logicalKey)) {
+        const collectionKey = directoryMarkerToCollectionKey(logicalKey);
+        if (!collectionKey || collectionKey === resourceKey || !isDescendantKey(resourceKey, collectionKey)) {
+          continue;
+        }
+
+        addAncestorCollectionResources(resources, resourceKey, collectionKey);
+        upsertCollectionResource(resources, {
+          kind: "collection",
+          key: collectionKey,
+          marker: object,
+        });
+        continue;
+      }
+
+      if (!isDescendantKey(resourceKey, logicalKey)) {
+        continue;
+      }
+
+      resources.set(logicalKey, {
+        kind: "file",
+        key: logicalKey,
+        object,
+      });
+      addAncestorCollectionResources(resources, resourceKey, logicalKey);
+    }
+
+    cursor = listing.truncated ? listing.cursor : undefined;
+  } while (cursor);
+
+  const maxDepth = depth === "infinity" ? Number.POSITIVE_INFINITY : depth;
+  return [...resources.values()]
+    .filter((resource) => relativeDepth(resourceKey, resource.key) <= maxDepth)
+    .sort((left, right) => comparePropfindResource(resourceKey, left, right));
+}
+
+function addAncestorCollectionResources(resources: Map<string, Resource>, baseKey: string, descendantKey: string): void {
+  const collectionKey = descendantKey.endsWith("/") ? descendantKey : parentCollectionKey(descendantKey);
+  if (!collectionKey) {
+    return;
+  }
+
+  const baseDepth = segmentCount(baseKey);
+  const segments = stripTrailingSlash(collectionKey).split("/").filter(Boolean);
+  for (let index = baseDepth + 1; index <= segments.length; index += 1) {
+    const key = `${segments.slice(0, index).join("/")}/`;
+    if (key === baseKey) {
+      continue;
+    }
+    upsertCollectionResource(resources, {
+      kind: "collection",
+      key,
+      marker: null,
+    });
+  }
+}
+
+function upsertCollectionResource(
+  resources: Map<string, Resource>,
+  nextResource: Extract<Resource, { kind: "collection" }>,
+): void {
+  const existing = resources.get(nextResource.key);
+  if (!existing || existing.kind !== "collection" || (!existing.marker && nextResource.marker)) {
+    resources.set(nextResource.key, nextResource);
+  }
+}
+
+function directoryMarkerToCollectionKey(logicalKey: string): string | null {
+  if (!isDirectoryMarker(logicalKey)) {
+    return null;
+  }
+  return `${logicalKey.slice(0, -(`/${DIRECTORY_MARKER}`.length))}/`;
+}
+
+function isDescendantKey(baseKey: string, candidateKey: string): boolean {
+  if (!baseKey) {
+    return candidateKey !== "";
+  }
+  return candidateKey !== baseKey && candidateKey.startsWith(collectionPrefix(baseKey));
+}
+
+function relativeDepth(baseKey: string, candidateKey: string): number {
+  return segmentCount(candidateKey) - segmentCount(baseKey);
+}
+
+function segmentCount(key: string): number {
+  if (!key) {
+    return 0;
+  }
+  return stripTrailingSlash(key).split("/").filter(Boolean).length;
+}
+
+function comparePropfindResource(baseKey: string, left: Resource, right: Resource): number {
+  const depthDifference = relativeDepth(baseKey, left.key) - relativeDepth(baseKey, right.key);
+  if (depthDifference !== 0) {
+    return depthDifference;
+  }
+  if (left.kind !== right.kind) {
+    return left.kind === "collection" ? -1 : 1;
+  }
+  return left.key.localeCompare(right.key);
 }
 
 async function handleLock(

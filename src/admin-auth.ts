@@ -1,14 +1,18 @@
 import {
   ADMIN_CONFIG_KEY,
+  ADMIN_LOGIN_ATTEMPT_PREFIX,
   ADMIN_SESSION_PREFIX,
+  LOGIN_ATTEMPT_LIMIT,
+  LOGIN_ATTEMPT_WINDOW_SECONDS,
   MANAGE_SEGMENT,
   SESSION_COOKIE_NAME,
   SESSION_TTL_SECONDS,
 } from "./constants";
-import { hashPassword } from "./security";
+import { hashPassword, sha256Hex, verifyPassword } from "./security";
 import type {
   AdminConfigRecord,
   AdminErrorCode,
+  AdminLoginAttemptRecord,
   AdminSessionRecord,
   Env,
 } from "./types";
@@ -56,9 +60,23 @@ export async function authenticateAdmin(
   if (!config) {
     return { ok: false, errorCode: "setup_required" };
   }
-  if ((await hashPassword(password)) !== config.passwordHash) {
+
+  const verification = await verifyPassword(password, config.passwordHash);
+  if (!verification.ok) {
     return { ok: false, errorCode: "invalid_credentials" };
   }
+
+  if (verification.upgradedHash) {
+    await env.WEBDAV_CONFIG.put(
+      ADMIN_CONFIG_KEY,
+      JSON.stringify({
+        ...config,
+        passwordHash: verification.upgradedHash,
+        updatedAt: new Date().toISOString(),
+      } satisfies AdminConfigRecord),
+    );
+  }
+
   return { ok: true, session: await createAdminSession(env) };
 }
 
@@ -66,12 +84,13 @@ export async function changeAdminPassword(
   env: Env,
   currentPassword: string,
   newPassword: string,
-): Promise<{ ok: true } | { ok: false; errorCode: AdminErrorCode }> {
+): Promise<{ ok: true; session: AdminSessionRecord } | { ok: false; errorCode: AdminErrorCode }> {
   const config = await getAdminConfig(env);
   if (!config) {
     return { ok: false, errorCode: "setup_required" };
   }
-  if ((await hashPassword(currentPassword)) !== config.passwordHash) {
+  const verification = await verifyPassword(currentPassword, config.passwordHash);
+  if (!verification.ok) {
     return { ok: false, errorCode: "current_password_invalid" };
   }
   if (!newPassword.trim()) {
@@ -84,7 +103,8 @@ export async function changeAdminPassword(
     updatedAt: new Date().toISOString(),
   };
   await env.WEBDAV_CONFIG.put(ADMIN_CONFIG_KEY, JSON.stringify(nextConfig));
-  return { ok: true };
+  await destroyAllAdminSessions(env);
+  return { ok: true, session: await createAdminSession(env) };
 }
 
 export async function createAdminSession(env: Env): Promise<AdminSessionRecord> {
@@ -126,6 +146,41 @@ export async function destroyAdminSession(env: Env, request: Request): Promise<v
   }
 }
 
+export async function destroyAllAdminSessions(env: Env): Promise<void> {
+  let cursor: string | undefined;
+  do {
+    const listing = await env.WEBDAV_CONFIG.list({
+      prefix: ADMIN_SESSION_PREFIX,
+      cursor,
+    } as KVNamespaceListOptions);
+    await Promise.all(listing.keys.map((entry) => env.WEBDAV_CONFIG.delete(entry.name)));
+    cursor = listing.list_complete ? undefined : listing.cursor;
+  } while (cursor);
+}
+
+export async function isAdminLoginRateLimited(env: Env, request: Request): Promise<boolean> {
+  const attempts = await getLoginAttemptRecord(env, request);
+  return (attempts?.count ?? 0) >= LOGIN_ATTEMPT_LIMIT;
+}
+
+export async function recordFailedAdminLogin(env: Env, request: Request): Promise<boolean> {
+  const key = await loginAttemptKey(request);
+  const attempts = (await env.WEBDAV_CONFIG.get<AdminLoginAttemptRecord>(key, "json")) ?? { count: 0 };
+  const nextAttempts = {
+    count: attempts.count + 1,
+  } satisfies AdminLoginAttemptRecord;
+
+  await env.WEBDAV_CONFIG.put(key, JSON.stringify(nextAttempts), {
+    expirationTtl: LOGIN_ATTEMPT_WINDOW_SECONDS,
+  });
+
+  return nextAttempts.count >= LOGIN_ATTEMPT_LIMIT;
+}
+
+export async function clearFailedAdminLogins(env: Env, request: Request): Promise<void> {
+  await env.WEBDAV_CONFIG.delete(await loginAttemptKey(request));
+}
+
 export function buildSessionCookie(url: URL, session: AdminSessionRecord): string {
   return serializeCookie(SESSION_COOKIE_NAME, session.id, {
     httpOnly: true,
@@ -148,6 +203,21 @@ export function clearSessionCookie(url: URL): string {
 
 export function validateCsrf(request: Request, session: AdminSessionRecord): boolean {
   return request.headers.get("x-csrf-token") === session.csrfToken;
+}
+
+async function getLoginAttemptRecord(env: Env, request: Request): Promise<AdminLoginAttemptRecord | null> {
+  return (await env.WEBDAV_CONFIG.get<AdminLoginAttemptRecord>(await loginAttemptKey(request), "json")) ?? null;
+}
+
+async function loginAttemptKey(request: Request): Promise<string> {
+  return `${ADMIN_LOGIN_ATTEMPT_PREFIX}${await sha256Hex(loginAttemptFingerprint(request))}`;
+}
+
+function loginAttemptFingerprint(request: Request): string {
+  const forwardedFor = request.headers.get("CF-Connecting-IP") ?? request.headers.get("X-Forwarded-For") ?? "unknown";
+  const clientIp = forwardedFor.split(",")[0]?.trim() || "unknown";
+  const userAgent = request.headers.get("User-Agent") ?? "unknown";
+  return `${clientIp}|${userAgent}`;
 }
 
 function parseCookies(request: Request): Map<string, string> {

@@ -58,6 +58,10 @@ export interface AdminConfigRecord {
   updatedAt: string;
 }
 
+export interface AdminLoginAttemptRecord {
+  count: number;
+}
+
 export interface AdminSessionRecord {
   id: string;
   csrfToken: string;
@@ -107,6 +111,7 @@ export type AdminErrorCode =
   | "current_password_invalid"
   | "new_password_required"
   | "bootstrap_token_invalid"
+  | "too_many_attempts"
   | "admin_session_required"
   | "csrf_invalid";
 

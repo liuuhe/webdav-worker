@@ -1,6 +1,7 @@
-import { getAppBySlug } from "./app-store";
+import { getAppBySlug, saveApp } from "./app-store";
 import { handleAdminRequest } from "./admin-routes";
 import { parseAdminRoute, parseAppRoute } from "./routes";
+import { authorizeAppRequest, unauthorizedWebDav } from "./security";
 import { handleWebDavRequest } from "./webdav";
 import type { AppAccess, Env } from "./types";
 
@@ -18,9 +19,31 @@ export default {
       return new Response("Not found.", { status: 404 });
     }
 
-    const app = await getAppBySlug(env, appRoute.token);
+    let app = await getAppBySlug(env, appRoute.token);
     if (!app) {
       return new Response("Not found.", { status: 404 });
+    }
+
+    const authResult = await authorizeAppRequest(request, {
+      appId: app.id,
+      appName: app.name,
+      slug: app.slug,
+      rootPrefix: app.rootPrefix,
+      basePath: appRoute.basePath,
+      authUsername: app.authUsername,
+      passwordHash: app.passwordHash,
+    });
+    if (!authResult.authorized) {
+      return unauthorizedWebDav(app.name);
+    }
+
+    if (authResult.upgradedPasswordHash && authResult.upgradedPasswordHash !== app.passwordHash) {
+      app = {
+        ...app,
+        passwordHash: authResult.upgradedPasswordHash,
+        updatedAt: new Date().toISOString(),
+      };
+      await saveApp(env, app);
     }
 
     const access: AppAccess = {
