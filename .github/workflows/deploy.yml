@@ -114,6 +114,7 @@ jobs:
         run: |
           npm run test
           npm run typecheck
+          npm run build:admin
           npx wrangler deploy --dry-run -c ./wrangler.prod.jsonc --secrets-file ./wrangler.secrets.json
 
       - name: Deploy Worker
