@@ -27,9 +27,15 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            admin/package-lock.json
 
-      - name: Install dependencies
+      - name: Install worker dependencies
         run: npm ci
+
+      - name: Install admin dependencies
+        run: npm --prefix admin ci
 
       - name: Validate required secrets
         env:
