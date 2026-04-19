@@ -31,6 +31,37 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Validate required secrets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CF_WORKER_NAME: ${{ secrets.CF_WORKER_NAME }}
+          CF_R2_BUCKET: ${{ secrets.CF_R2_BUCKET }}
+          CF_KV_NAMESPACE_ID: ${{ secrets.CF_KV_NAMESPACE_ID }}
+          CF_KV_PREVIEW_ID: ${{ secrets.CF_KV_PREVIEW_ID }}
+          CF_ADMIN_TOKEN: ${{ secrets.CF_ADMIN_TOKEN }}
+        run: |
+          missing=()
+          for name in \
+            CLOUDFLARE_API_TOKEN \
+            CLOUDFLARE_ACCOUNT_ID \
+            CF_WORKER_NAME \
+            CF_R2_BUCKET \
+            CF_KV_NAMESPACE_ID \
+            CF_KV_PREVIEW_ID \
+            CF_ADMIN_TOKEN
+          do
+            if [ -z "${!name}" ]; then
+              missing+=("$name")
+            fi
+          done
+
+          if [ "${#missing[@]}" -gt 0 ]; then
+            printf 'Missing required GitHub Secrets:\n' >&2
+            printf ' - %s\n' "${missing[@]}" >&2
+            exit 1
+          fi
+
       - name: Generate production Wrangler config
         env:
           CF_WORKER_NAME: ${{ secrets.CF_WORKER_NAME }}
