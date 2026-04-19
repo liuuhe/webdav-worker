@@ -5,8 +5,10 @@ import { ExternalLinkIcon, PlusIcon, RefreshCcwIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { changeAdminPassword, getSessionState, listApps, logoutAdmin } from "@/lib/api"
+import { I18nProvider, resolveErrorMessage, useI18n } from "@/lib/i18n"
 import type { PublicApp, SessionState } from "@/lib/types"
 import { AdminShell } from "@/components/admin-shell"
+import { LanguageSwitcher } from "@/components/language-switcher"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Spinner } from "@/components/ui/spinner"
@@ -30,6 +32,15 @@ const EditAppPage = lazy(async () => ({
 }))
 
 function App() {
+  return (
+    <I18nProvider>
+      <AppContent />
+    </I18nProvider>
+  )
+}
+
+function AppContent() {
+  const { text } = useI18n()
   const [session, setSession] = useState<SessionState | null>(null)
   const [sessionLoading, setSessionLoading] = useState(true)
   const [sessionError, setSessionError] = useState<string | null>(null)
@@ -61,8 +72,7 @@ function App() {
         if (cancelled) {
           return
         }
-        const message = error instanceof Error ? error.message : "Unable to load apps."
-        toast.error(message)
+        toast.error(resolveErrorMessage(error, text, "Unable to load apps."))
       } finally {
         if (!cancelled) {
           setAppsLoading(false)
@@ -73,7 +83,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [session?.authenticated])
+  }, [session?.authenticated, text])
 
   async function refreshSession(options?: { silent?: boolean }) {
     const silent = options?.silent ?? false
@@ -86,8 +96,7 @@ function App() {
       setSessionError(null)
       startTransition(() => setSession(response.data))
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unable to load the admin session."
-      setSessionError(message)
+      setSessionError(resolveErrorMessage(error, text, "Unable to load the admin session."))
     } finally {
       if (!silent) {
         setSessionLoading(false)
@@ -105,8 +114,7 @@ function App() {
       const response = await listApps()
       startTransition(() => setApps(sortApps(response.data.apps)))
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unable to refresh apps."
-      toast.error(message)
+      toast.error(resolveErrorMessage(error, text, "Unable to refresh apps."))
     } finally {
       setAppsLoading(false)
     }
@@ -114,7 +122,7 @@ function App() {
 
   async function handleLogout() {
     if (!session?.csrfToken) {
-      throw new Error("No active admin session.")
+      throw new Error(text("No active admin session.", "当前没有可用的管理员会话。"))
     }
 
     await logoutAdmin(session.csrfToken)
@@ -130,7 +138,7 @@ function App() {
 
   async function handleChangePassword(currentPassword: string, newPassword: string) {
     if (!session?.csrfToken) {
-      throw new Error("No active admin session.")
+      throw new Error(text("No active admin session.", "当前没有可用的管理员会话。"))
     }
 
     await changeAdminPassword(currentPassword, newPassword, session.csrfToken)
@@ -191,6 +199,9 @@ function App() {
 
   return (
     <TooltipProvider>
+      <div className="fixed right-4 top-4 z-50">
+        <LanguageSwitcher />
+      </div>
       {content}
       <Toaster closeButton position="top-right" richColors />
     </TooltipProvider>
@@ -220,49 +231,59 @@ function AuthenticatedConsole({
   onRefreshApps,
   onUpdated,
 }: AuthenticatedConsoleProps) {
+  const { text } = useI18n()
   const location = useLocation()
   const appIdMatch = location.pathname.match(/^\/apps\/([^/]+)$/)
   const currentApp = appIdMatch ? apps.find((app) => app.id === decodeURIComponent(appIdMatch[1])) ?? null : null
 
-  let title = "Apps overview"
-  let description = "Scan paths, auth state, and open a dedicated workspace for changes."
+  let title = text("Apps overview", "应用总览")
+  let description = text(
+    "Scan paths, auth state, and open a dedicated workspace for changes.",
+    "查看路径和认证状态，并进入独立工作区进行修改。",
+  )
   let actions: ReactNode = (
     <>
       <Button variant="outline" onClick={() => void onRefreshApps()}>
         <RefreshCcwIcon data-icon="inline-start" />
-        Refresh
+        {text("Refresh", "刷新")}
       </Button>
       <Button asChild>
         <Link to="/create">
           <PlusIcon data-icon="inline-start" />
-          New app
+          {text("New app", "新建应用")}
         </Link>
       </Button>
     </>
   )
 
   if (location.pathname === "/create") {
-    title = "Create a new app"
-    description = "Pick the public path and storage prefix first, then decide whether Basic Auth belongs here."
+    title = text("Create a new app", "创建新应用")
+    description = text(
+      "Pick the public path and storage prefix first, then decide whether Basic Auth belongs here.",
+      "先确定公网路径和存储前缀，再决定是否启用 Basic Auth。",
+    )
     actions = (
       <Button variant="outline" onClick={() => void onRefreshApps()}>
         <RefreshCcwIcon data-icon="inline-start" />
-        Refresh
+        {text("Refresh", "刷新")}
       </Button>
     )
   } else if (currentApp) {
-    title = `Edit ${currentApp.name}`
-    description = "Use the dedicated workspace to update identity, auth policy, and destructive operations."
+    title = text(`Edit ${currentApp.name}`, `编辑 ${currentApp.name}`)
+    description = text(
+      "Use the dedicated workspace to update identity, auth policy, and destructive operations.",
+      "在独立工作区中修改标识、认证策略和危险操作配置。",
+    )
     actions = (
       <>
         <Button variant="outline" onClick={() => void onRefreshApps()}>
           <RefreshCcwIcon data-icon="inline-start" />
-          Refresh
+          {text("Refresh", "刷新")}
         </Button>
         <Button asChild>
           <a href={currentApp.accessUrl} rel="noreferrer" target="_blank">
             <ExternalLinkIcon data-icon="inline-start" />
-            Open endpoint
+            {text("Open endpoint", "打开端点")}
           </a>
         </Button>
       </>
@@ -352,17 +373,20 @@ function EditRoute({
 }
 
 function LoadingScreen() {
+  const { text } = useI18n()
   return (
     <div className="min-h-svh bg-muted/30 px-6 py-10">
       <div className="mx-auto flex min-h-[calc(100svh-5rem)] max-w-3xl items-center justify-center">
         <Card className="w-full max-w-lg">
           <CardHeader>
-            <CardTitle>Loading admin console</CardTitle>
-            <CardDescription>Checking session state and preparing the WebDAV control plane.</CardDescription>
+            <CardTitle>{text("Loading admin console", "正在加载管理控制台")}</CardTitle>
+            <CardDescription>
+              {text("Checking session state and preparing the WebDAV control plane.", "正在检查会话状态并准备 WebDAV 控制平面。")}
+            </CardDescription>
           </CardHeader>
           <CardContent className="flex items-center gap-3 text-sm text-muted-foreground">
             <Spinner data-icon="inline-start" />
-            <span>Fetching current admin state.</span>
+            <span>{text("Fetching current admin state.", "正在获取当前管理员状态。")}</span>
           </CardContent>
         </Card>
       </div>
@@ -377,20 +401,21 @@ function FatalScreen({
   message: string
   onRetry: () => void
 }) {
+  const { text } = useI18n()
   return (
     <div className="min-h-svh bg-muted/30 px-6 py-10">
       <div className="mx-auto flex min-h-[calc(100svh-5rem)] max-w-3xl items-center justify-center">
         <Card className="w-full max-w-xl">
           <CardHeader>
-            <CardTitle>Unable to load the admin console</CardTitle>
-            <CardDescription>The Worker did not return a usable session response.</CardDescription>
+            <CardTitle>{text("Unable to load the admin console", "无法加载管理控制台")}</CardTitle>
+            <CardDescription>{text("The Worker did not return a usable session response.", "Worker 未返回可用的会话响应。")}</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-6">
             <p className="text-sm leading-7 text-muted-foreground">{message}</p>
             <div className="flex items-center gap-3">
               <Button onClick={onRetry}>
                 <RefreshCcwIcon data-icon="inline-start" />
-                Retry
+                {text("Retry", "重试")}
               </Button>
             </div>
           </CardContent>
@@ -411,15 +436,16 @@ function sortApps(apps: PublicApp[]) {
 }
 
 function RouteLoadingState() {
+  const { text } = useI18n()
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Loading workspace</CardTitle>
-        <CardDescription>Fetching the next admin view.</CardDescription>
+        <CardTitle>{text("Loading workspace", "正在加载工作区")}</CardTitle>
+        <CardDescription>{text("Fetching the next admin view.", "正在获取下一个管理视图。")}</CardDescription>
       </CardHeader>
       <CardContent className="flex items-center gap-3 text-sm text-muted-foreground">
         <Spinner data-icon="inline-start" />
-        <span>Preparing page assets.</span>
+        <span>{text("Preparing page assets.", "正在准备页面资源。")}</span>
       </CardContent>
     </Card>
   )

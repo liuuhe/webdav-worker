@@ -2,6 +2,7 @@ import type { ReactNode } from "react"
 import { Link, NavLink, useLocation } from "react-router-dom"
 import { FolderKanbanIcon, LayoutGridIcon, PencilRulerIcon } from "lucide-react"
 
+import { useI18n } from "@/lib/i18n"
 import type { PublicApp } from "@/lib/types"
 import { AccountSheet } from "@/components/account-sheet"
 import { Badge } from "@/components/ui/badge"
@@ -43,6 +44,7 @@ export function AdminShell({
   onLogout,
   children,
 }: AdminShellProps) {
+  const { text } = useI18n()
   const location = useLocation()
   const securedApps = apps.filter((app) => app.authEnabled).length
 
@@ -52,10 +54,10 @@ export function AdminShell({
         <SidebarHeader>
           <SidebarMenu>
             <SidebarMenuItem>
-              <SidebarMenuButton asChild size="lg" tooltip="Dashboard">
+              <SidebarMenuButton asChild size="lg" tooltip={text("Dashboard", "控制台")}>
                 <Link to="/">
                   <FolderKanbanIcon />
-                  <span>WebDAV Console</span>
+                  <span>{text("WebDAV Console", "WebDAV 控制台")}</span>
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>
@@ -64,23 +66,23 @@ export function AdminShell({
         <SidebarSeparator />
         <SidebarContent>
           <SidebarGroup>
-            <SidebarGroupLabel>Navigate</SidebarGroupLabel>
+            <SidebarGroupLabel>{text("Navigate", "导航")}</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
                 <SidebarMenuItem>
-                  <SidebarMenuButton asChild isActive={location.pathname === "/"} tooltip="Overview">
+                  <SidebarMenuButton asChild isActive={location.pathname === "/"} tooltip={text("Overview", "概览")}>
                     <NavLink to="/">
                       <LayoutGridIcon />
-                      <span>Overview</span>
+                      <span>{text("Overview", "概览")}</span>
                     </NavLink>
                   </SidebarMenuButton>
                   <SidebarMenuBadge>{apps.length}</SidebarMenuBadge>
                 </SidebarMenuItem>
                 <SidebarMenuItem>
-                  <SidebarMenuButton asChild isActive={location.pathname === "/create"} tooltip="Create app">
+                  <SidebarMenuButton asChild isActive={location.pathname === "/create"} tooltip={text("Create app", "创建应用")}>
                     <NavLink to="/create">
                       <PencilRulerIcon />
-                      <span>New app</span>
+                      <span>{text("New app", "新建应用")}</span>
                     </NavLink>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
@@ -89,15 +91,15 @@ export function AdminShell({
           </SidebarGroup>
 
           <SidebarGroup>
-            <SidebarGroupLabel>Current state</SidebarGroupLabel>
+            <SidebarGroupLabel>{text("Current state", "当前状态")}</SidebarGroupLabel>
             <SidebarGroupContent>
               <div className="flex flex-col gap-3 px-2 py-1 text-sm text-sidebar-foreground/80">
                 <div className="flex items-center justify-between gap-3">
-                  <span>Apps</span>
+                  <span>{text("Apps", "应用数")}</span>
                   <Badge variant="secondary">{apps.length}</Badge>
                 </div>
                 <div className="flex items-center justify-between gap-3">
-                  <span>Basic Auth</span>
+                  <span>{text("Basic Auth", "Basic Auth")}</span>
                   <Badge variant="outline">{securedApps}</Badge>
                 </div>
               </div>
