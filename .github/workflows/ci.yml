@@ -25,7 +25,7 @@ jobs:
         run: npm ci
 
       - name: Install admin dependencies
-        run: npm --prefix admin ci
+        run: npm --prefix admin install
 
       - name: Run repository checks
         run: npm run check

@@ -187,7 +187,7 @@ npm run deploy
 
 执行流程如下：
 
-1. GitHub Actions 拉取代码后会执行 `npm ci` 和 `npm --prefix admin ci`。
+1. GitHub Actions 拉取代码后会执行 `npm ci` 和 `npm --prefix admin install`。
 2. 用公开仓库里的 `wrangler.jsonc` 模板配合 GitHub Secrets 生成临时的 `wrangler.prod.jsonc`。
 3. 先对这份生产配置执行测试、类型检查和 `wrangler deploy --dry-run`。
 4. 验证通过后，再用 Wrangler CLI 和临时 secrets 文件做正式部署。

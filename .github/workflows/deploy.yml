@@ -35,7 +35,7 @@ jobs:
         run: npm ci
 
       - name: Install admin dependencies
-        run: npm --prefix admin ci
+        run: npm --prefix admin install
 
       - name: Validate required secrets
         env:

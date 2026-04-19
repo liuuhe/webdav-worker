@@ -187,7 +187,7 @@ Add these GitHub repository secrets before enabling it:
 
 How it works:
 
-1. GitHub Actions checks out the repo and runs `npm ci` plus `npm --prefix admin ci`.
+1. GitHub Actions checks out the repo and runs `npm ci` plus `npm --prefix admin install`.
 2. It generates a temporary `wrangler.prod.jsonc` from the public `wrangler.jsonc` template plus your GitHub Secrets.
 3. It runs tests, typecheck, and `wrangler deploy --dry-run` against that production config.
 4. If validation passes, it deploys with the Wrangler CLI and a generated secrets file.
