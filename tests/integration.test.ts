@@ -105,6 +105,37 @@ describe("worker integration", () => {
     });
   });
 
+  it("serves /manage/ without self-redirect loops when assets canonicalize index.html", async () => {
+    const env = createEnv();
+    const origin = "https://example.com";
+    env.ASSETS = {
+      async fetch(input: RequestInfo | URL, init?: RequestInit) {
+        const request = input instanceof Request ? input : new Request(input, init);
+        const pathname = new URL(request.url).pathname;
+        if (pathname === "/manage/index.html") {
+          return new Response(null, {
+            status: 307,
+            headers: {
+              Location: "/manage/",
+            },
+          });
+        }
+        if (pathname === "/manage/" || pathname.startsWith("/manage/assets/")) {
+          return new Response("<!doctype html><html><body><div id=\"root\"></div></body></html>", {
+            headers: {
+              "Content-Type": "text/html; charset=utf-8",
+            },
+          });
+        }
+        return new Response("Not found.", { status: 404 });
+      },
+    } as unknown as Fetcher;
+
+    const shellResponse = await worker.fetch(new Request(origin + "/manage/"), env);
+    expect(shellResponse.status).toBe(200);
+    expect(await shellResponse.text()).toContain('<div id="root"></div>');
+  });
+
   it("supports admin setup, app creation, and WebDAV CRUD/COPY/MOVE", async () => {
     const env = createEnv();
     const origin = "https://example.com";

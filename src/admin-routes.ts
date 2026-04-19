@@ -107,11 +107,13 @@ async function serveAdminApp(request: Request, env: Env, url: URL, route: AdminR
     });
   }
 
-  const assetPath = route.subPath === "/" ? `/${MANAGE_SEGMENT}/index.html` : url.pathname;
-  const assetUrl = new URL(assetPath, url);
-  const assetResponse = await env.ASSETS.fetch(new Request(assetUrl.toString(), request));
+  const manageRootPath = `/${MANAGE_SEGMENT}/`;
+  if (route.subPath === "/") {
+    return env.ASSETS.fetch(new Request(new URL(manageRootPath, url).toString(), request));
+  }
 
-  if (assetResponse.status !== 404 && route.subPath !== "/") {
+  const assetResponse = await env.ASSETS.fetch(new Request(url.toString(), request));
+  if (assetResponse.status !== 404) {
     return assetResponse;
   }
 
@@ -119,7 +121,7 @@ async function serveAdminApp(request: Request, env: Env, url: URL, route: AdminR
     return assetResponse;
   }
 
-  return env.ASSETS.fetch(new Request(new URL(`/${MANAGE_SEGMENT}/index.html`, url).toString(), request));
+  return env.ASSETS.fetch(new Request(new URL(manageRootPath, url).toString(), request));
 }
 
 async function handleSession(request: Request, env: Env): Promise<Response> {
