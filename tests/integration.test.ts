@@ -77,6 +77,7 @@ describe("worker integration", () => {
 
     const shellResponse = await worker.fetch(new Request(origin + "/manage"), env);
     expect(shellResponse.status).toBe(200);
+    expect(shellResponse.headers.get("cache-control")).toContain("no-store");
     expect(await shellResponse.text()).toContain('<div id="root"></div>');
 
     const anonymousSessionResponse = await worker.fetch(new Request(origin + "/manage/api/session"), env);
@@ -133,6 +134,7 @@ describe("worker integration", () => {
 
     const shellResponse = await worker.fetch(new Request(origin + "/manage/"), env);
     expect(shellResponse.status).toBe(200);
+    expect(shellResponse.headers.get("cache-control")).toContain("no-store");
     expect(await shellResponse.text()).toContain('<div id="root"></div>');
   });
 

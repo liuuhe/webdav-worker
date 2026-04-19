@@ -109,7 +109,8 @@ async function serveAdminApp(request: Request, env: Env, url: URL, route: AdminR
 
   const manageRootPath = `/${MANAGE_SEGMENT}/`;
   if (route.subPath === "/") {
-    return env.ASSETS.fetch(new Request(new URL(manageRootPath, url).toString(), request));
+    const shellResponse = await env.ASSETS.fetch(new Request(new URL(manageRootPath, url).toString(), request));
+    return withNoStoreForHtml(shellResponse);
   }
 
   const assetResponse = await env.ASSETS.fetch(new Request(url.toString(), request));
@@ -121,7 +122,8 @@ async function serveAdminApp(request: Request, env: Env, url: URL, route: AdminR
     return assetResponse;
   }
 
-  return env.ASSETS.fetch(new Request(new URL(manageRootPath, url).toString(), request));
+  const shellResponse = await env.ASSETS.fetch(new Request(new URL(manageRootPath, url).toString(), request));
+  return withNoStoreForHtml(shellResponse);
 }
 
 async function handleSession(request: Request, env: Env): Promise<Response> {
@@ -343,4 +345,19 @@ async function readJson<T>(request: Request): Promise<T | null> {
   } catch {
     return null;
   }
+}
+
+function withNoStoreForHtml(response: Response): Response {
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  if (!contentType.startsWith("text/html")) {
+    return response;
+  }
+
+  const headers = new Headers(response.headers);
+  headers.set("Cache-Control", "no-store");
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
