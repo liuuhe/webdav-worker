@@ -4,7 +4,7 @@
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/liuuhe/webdav-worker)
 
-基于 Cloudflare Workers、R2 和 KV 的路径式 WebDAV 服务，并带一个轻量管理后台，适合统一管理多个应用的同步目录。
+基于 Cloudflare Workers、R2、KV 和 Durable Object 的路径式 WebDAV 服务，并带一个重做后的 React 管理后台，适合统一管理多个应用的同步目录。
 
 ## 功能
 
@@ -12,8 +12,7 @@
 - 每个应用使用独立存储目录
 - 每个应用可选开启 WebDAV Basic Auth
 - 支持带锁语义的 WebDAV 流程，包括 `LOCK`、`UNLOCK`、`COPY`、`MOVE` 和 `PROPFIND`
-- 管理后台地址为 `https://<你的域名>/manage`
-- 后台支持中英双语，默认英文
+- 基于 React + shadcn 的管理后台地址为 `https://<你的域名>/manage`
 - 不需要自建服务器，直接运行在 Cloudflare Workers 上
 
 ## WebDAV 兼容性
@@ -39,7 +38,9 @@
 
 - 运行时：Cloudflare Workers
 - 文件存储：Cloudflare R2
-- 应用配置：Cloudflare KV
+- 配置镜像：Cloudflare KV
+- 串行化后台写入：Durable Object
+- 后台前端：位于 [admin/](admin) 的 React + Vite + shadcn/ui
 - 主入口：[src/index.ts](src/index.ts)
 - Worker 配置：[wrangler.jsonc](wrangler.jsonc)
 
@@ -95,6 +96,7 @@
 
 ```powershell
 npm install
+npm --prefix admin install
 ```
 
 #### 2. 登录 Cloudflare
@@ -185,10 +187,10 @@ npm run deploy
 
 执行流程如下：
 
-1. GitHub Actions 拉取代码并执行 `npm ci`。
+1. GitHub Actions 拉取代码后会执行 `npm ci` 和 `npm --prefix admin ci`。
 2. 用公开仓库里的 `wrangler.jsonc` 模板配合 GitHub Secrets 生成临时的 `wrangler.prod.jsonc`。
 3. 先对这份生产配置执行测试、类型检查和 `wrangler deploy --dry-run`。
-4. 验证通过后，再用官方 `cloudflare/wrangler-action@v3` 做正式部署。
+4. 验证通过后，再用 Wrangler CLI 和临时 secrets 文件做正式部署。
 5. 工作流会把 `CF_ADMIN_TOKEN` 同步为 Worker 的 `ADMIN_TOKEN` secret。
 
 注意：
@@ -254,7 +256,19 @@ npm run deploy
 ADMIN_TOKEN=replace-with-a-long-random-string
 ```
 
-然后运行：
+先安装后台前端依赖：
+
+```powershell
+npm --prefix admin install
+```
+
+在启动 Worker 本地开发前，先构建后台静态资源：
+
+```powershell
+npm run build:admin
+```
+
+然后运行 Worker：
 
 ```powershell
 npm run dev

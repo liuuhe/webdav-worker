@@ -4,7 +4,7 @@
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/liuuhe/webdav-worker)
 
-A path-based WebDAV service built on Cloudflare Workers, R2, and KV, with a lightweight admin panel for managing multiple apps from one place.
+A path-based WebDAV service built on Cloudflare Workers, R2, KV, and Durable Objects, with a redesigned React admin console for managing multiple apps from one place.
 
 ## Features
 
@@ -12,8 +12,7 @@ A path-based WebDAV service built on Cloudflare Workers, R2, and KV, with a ligh
 - One isolated storage prefix per app
 - Optional WebDAV Basic Auth per app
 - Lock-aware WebDAV flows with `LOCK`, `UNLOCK`, `COPY`, `MOVE`, and `PROPFIND`
-- Lightweight admin panel at `https://<your-domain>/manage`
-- English-first bilingual admin UI with Chinese switching support
+- React + shadcn admin console at `https://<your-domain>/manage`
 - Works on Cloudflare Workers without running your own server
 
 ## WebDAV Compatibility
@@ -39,7 +38,9 @@ Example:
 
 - Runtime: Cloudflare Workers
 - File storage: Cloudflare R2
-- App metadata: Cloudflare KV
+- Metadata mirror: Cloudflare KV
+- Serialized admin/config writes: Durable Object
+- Admin frontend: React + Vite + shadcn/ui in [admin/](admin)
 - Main entry: [src/index.ts](src/index.ts)
 - Worker config: [wrangler.jsonc](wrangler.jsonc)
 
@@ -95,6 +96,7 @@ There are three practical ways to deploy this project.
 
 ```powershell
 npm install
+npm --prefix admin install
 ```
 
 #### 2. Log in to Cloudflare
@@ -185,10 +187,10 @@ Add these GitHub repository secrets before enabling it:
 
 How it works:
 
-1. GitHub Actions checks out the repo and runs `npm ci`.
+1. GitHub Actions checks out the repo and runs `npm ci` plus `npm --prefix admin ci`.
 2. It generates a temporary `wrangler.prod.jsonc` from the public `wrangler.jsonc` template plus your GitHub Secrets.
 3. It runs tests, typecheck, and `wrangler deploy --dry-run` against that production config.
-4. If validation passes, it deploys with the official `cloudflare/wrangler-action@v3`.
+4. If validation passes, it deploys with the Wrangler CLI and a generated secrets file.
 5. The workflow also updates the Worker secret `ADMIN_TOKEN` from `CF_ADMIN_TOKEN`.
 
 Notes:
@@ -254,7 +256,19 @@ Create a local `.dev.vars` file from `.dev.vars.example`:
 ADMIN_TOKEN=replace-with-a-long-random-string
 ```
 
-Then run:
+Install the admin frontend once:
+
+```powershell
+npm --prefix admin install
+```
+
+Build the admin assets before running Worker dev:
+
+```powershell
+npm run build:admin
+```
+
+Then run the Worker locally:
 
 ```powershell
 npm run dev
