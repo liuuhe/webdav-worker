@@ -78,7 +78,7 @@
 
 ## 如何部署你自己的 WebDAV 服务
 
-有两种实际可用的部署方式。
+有三种实际可用的部署方式。
 
 ### 方案 A：直接从这个公开仓库部署
 
@@ -169,6 +169,34 @@ npm run deploy
 
 - `https://webdav.example.com/manage`
 
+### 方案 C：使用 GitHub Actions 自动部署
+
+仓库现在已经带了 `.github/workflows/deploy.yml`，可以在推送到 `main` 时自动部署。
+
+启用前需要先在 GitHub 仓库里配置这些 Secrets：
+
+- `CLOUDFLARE_API_TOKEN`
+- `CLOUDFLARE_ACCOUNT_ID`
+- `CF_WORKER_NAME`
+- `CF_R2_BUCKET`
+- `CF_KV_NAMESPACE_ID`
+- `CF_KV_PREVIEW_ID`
+- `CF_ADMIN_TOKEN`
+
+执行流程如下：
+
+1. GitHub Actions 拉取代码并执行 `npm ci`。
+2. 用公开仓库里的 `wrangler.jsonc` 模板配合 GitHub Secrets 生成临时的 `wrangler.prod.jsonc`。
+3. 先对这份生产配置执行测试、类型检查和 `wrangler deploy --dry-run`。
+4. 验证通过后，再用官方 `cloudflare/wrangler-action@v3` 做正式部署。
+5. 工作流会把 `CF_ADMIN_TOKEN` 同步为 Worker 的 `ADMIN_TOKEN` secret。
+
+注意：
+
+- 本地 `git commit` 本身不会触发部署。
+- `git push` 到 `main` 后会同时触发 CI 和自动部署工作流。
+- 自定义域名仍然需要在 Cloudflare 里管理，不放在这个公开模板里。
+
 ## 自定义域名
 
 如果你希望用自己的域名或子域名提供 WebDAV 服务：
@@ -240,3 +268,4 @@ npm run dev
 - 把占位 bucket、KV ID 都替换成你自己的
 - 如果要做 Deploy to Cloudflare 按钮，使用你自己的公开仓库地址
 - 不要提交生产环境 secrets
+- 如果启用 GitHub Actions 自动部署，把生产配置放在 GitHub Secrets 里，不要写进仓库

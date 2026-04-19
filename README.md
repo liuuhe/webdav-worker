@@ -78,7 +78,7 @@ What still needs manual input:
 
 ## Deploy Your Own WebDAV Service
 
-There are two practical ways to deploy this project.
+There are three practical ways to deploy this project.
 
 ### Option A: Deploy to Cloudflare from this public repo
 
@@ -169,6 +169,34 @@ If you later attach a custom domain:
 
 - `https://webdav.example.com/manage`
 
+### Option C: Automatic deployment with GitHub Actions
+
+This repository now includes a deploy workflow at `.github/workflows/deploy.yml` that can automatically deploy on pushes to `main`.
+
+Add these GitHub repository secrets before enabling it:
+
+- `CLOUDFLARE_API_TOKEN`
+- `CLOUDFLARE_ACCOUNT_ID`
+- `CF_WORKER_NAME`
+- `CF_R2_BUCKET`
+- `CF_KV_NAMESPACE_ID`
+- `CF_KV_PREVIEW_ID`
+- `CF_ADMIN_TOKEN`
+
+How it works:
+
+1. GitHub Actions checks out the repo and runs `npm ci`.
+2. It generates a temporary `wrangler.prod.jsonc` from the public `wrangler.jsonc` template plus your GitHub Secrets.
+3. It runs tests, typecheck, and `wrangler deploy --dry-run` against that production config.
+4. If validation passes, it deploys with the official `cloudflare/wrangler-action@v3`.
+5. The workflow also updates the Worker secret `ADMIN_TOKEN` from `CF_ADMIN_TOKEN`.
+
+Notes:
+
+- A local `git commit` does not deploy anything by itself.
+- A `git push` to `main` will trigger both CI and the deploy workflow.
+- Custom domains are still managed in Cloudflare, not in this public template.
+
 ## Custom Domain Setup
 
 To serve WebDAV from your own domain or subdomain:
@@ -240,3 +268,4 @@ If you want to publish your own version of this project:
 - Replace placeholder binding IDs and bucket names with your own values
 - Use your own public repo URL for any Deploy to Cloudflare button
 - Do not commit production secrets
+- If you enable GitHub Actions deploys, store production values in GitHub Secrets instead of repository files
