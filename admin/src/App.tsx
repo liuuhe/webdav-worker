@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Spinner } from "@/components/ui/spinner"
 import { Toaster } from "@/components/ui/sonner"
+import { TooltipProvider } from "@/components/ui/tooltip"
 
 const SetupScreen = lazy(async () => ({
   default: (await import("@/components/setup-screen")).SetupScreen,
@@ -189,10 +190,10 @@ function App() {
   }
 
   return (
-    <>
+    <TooltipProvider>
       {content}
       <Toaster closeButton position="top-right" richColors />
-    </>
+    </TooltipProvider>
   )
 }
 
