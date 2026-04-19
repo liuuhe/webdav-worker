@@ -72,6 +72,16 @@ export interface AdminPageState {
   accessPath: string;
 }
 
+export interface LockDetails {
+  token: string;
+  owner?: string;
+  scope: "exclusive" | "shared";
+  depth: "0" | "infinity";
+  timeout: string;
+  expiresAt: number;
+  rootKey: string;
+}
+
 export type AdminErrorCode =
   | "invalid_json"
   | "app_not_found"

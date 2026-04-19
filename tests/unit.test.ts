@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { hydrateAppRecord, saveApp, validateAppUniqueness } from "../src/app-store";
 import { normalizeAppInput } from "../src/app-validation";
 import { parseAdminRoute, parseAppRoute } from "../src/routes";
+import { determineLockDepth, extractLockOwner, normalizeLockToken, parseTimeout } from "../src/webdav-locks";
 import type { AppRecord } from "../src/types";
 import { createEnv } from "./mocks";
 
@@ -93,5 +94,29 @@ describe("app storage", () => {
         rootPrefix: "secondary/",
       }),
     ).resolves.toBe("path_in_use");
+  });
+});
+
+describe("webdav lock helpers", () => {
+  it("parses namespaced owners and normalizes lock headers", () => {
+    expect(
+      extractLockOwner(
+        '<d:owner xmlns:d="DAV:"><d:href>https://example.com/owners/tester</d:href></d:owner>',
+      ),
+    ).toBe("<d:href>https://example.com/owners/tester</d:href>");
+    expect(normalizeLockToken("<urn:uuid:demo-token>")).toBe("demo-token");
+  });
+
+  it("derives default depth and timeout values for locks", () => {
+    expect(determineLockDepth(true, null)).toBe("infinity");
+    expect(determineLockDepth(false, null)).toBe("0");
+    expect(determineLockDepth(true, "1")).toBeNull();
+
+    const infiniteTimeout = parseTimeout("Infinite");
+    expect(infiniteTimeout.timeout).toBe("Infinite");
+    expect(infiniteTimeout.expiresAt).toBeGreaterThan(Date.now());
+
+    const cappedTimeout = parseTimeout("Second-999999999");
+    expect(cappedTimeout.timeout).toBe("Second-31536000");
   });
 });

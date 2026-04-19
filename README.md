@@ -11,9 +11,18 @@ A path-based WebDAV service built on Cloudflare Workers, R2, and KV, with a ligh
 - Fixed WebDAV URLs such as `https://webdav.example.com/obsidian-notes/`
 - One isolated storage prefix per app
 - Optional WebDAV Basic Auth per app
+- Lock-aware WebDAV flows with `LOCK`, `UNLOCK`, `COPY`, `MOVE`, and `PROPFIND`
 - Lightweight admin panel at `https://<your-domain>/manage`
 - English-first bilingual admin UI with Chinese switching support
 - Works on Cloudflare Workers without running your own server
+
+## WebDAV Compatibility
+
+- Class 1 WebDAV operations for path-based file sync
+- Class 2 style locking support with `LOCK` and `UNLOCK`
+- `Depth: infinity` collection locks for protecting nested content
+- Lock discovery exposed in `PROPFIND`
+- Lock state preserved on `MOVE` and intentionally not copied on `COPY`
 
 ## Route Model
 

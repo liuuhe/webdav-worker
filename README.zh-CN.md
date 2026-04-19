@@ -11,9 +11,18 @@
 - 固定路径式 WebDAV 地址，例如 `https://webdav.example.com/obsidian-notes/`
 - 每个应用使用独立存储目录
 - 每个应用可选开启 WebDAV Basic Auth
+- 支持带锁语义的 WebDAV 流程，包括 `LOCK`、`UNLOCK`、`COPY`、`MOVE` 和 `PROPFIND`
 - 管理后台地址为 `https://<你的域名>/manage`
 - 后台支持中英双语，默认英文
 - 不需要自建服务器，直接运行在 Cloudflare Workers 上
+
+## WebDAV 兼容性
+
+- 支持路径式文件同步所需的 Class 1 WebDAV 能力
+- 支持 `LOCK` 和 `UNLOCK` 这类 Class 2 锁语义
+- 支持 `Depth: infinity` 的集合锁，可保护整棵子目录
+- 在 `PROPFIND` 中暴露锁信息
+- `MOVE` 会保留锁状态，`COPY` 不会复制锁
 
 ## 路由模型
 

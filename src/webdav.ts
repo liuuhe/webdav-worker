@@ -1,6 +1,21 @@
-import { DAV_ALLOW, DAV_HEADERS, DIRECTORY_MARKER } from "./constants";
+import { DAV_HEADERS, DIRECTORY_MARKER } from "./constants";
 import { isAuthorizedForApp, unauthorizedWebDav } from "./security";
-import type { AppAccess, Env, Resource } from "./types";
+import {
+  assertLockPermission,
+  assertRecursiveDeletePermission,
+  deleteLockRecordsForPath,
+  determineLockDepth,
+  extractLockOwner,
+  findMatchingLock,
+  getApplicableLockDetails,
+  getExactLockDetails,
+  getLockDiscoveryXml,
+  getSupportedLockXml,
+  moveLockRecords,
+  parseTimeout,
+  putExactLockDetails,
+} from "./webdav-locks";
+import type { AppAccess, Env, LockDetails, Resource } from "./types";
 
 export async function handleWebDavRequest(
   request: Request,
@@ -19,7 +34,7 @@ export async function handleWebDavRequest(
     case "PROPFIND":
       return handlePropfind(request, env, url, access, logicalPath);
     case "MKCOL":
-      return handleMkcol(env, logicalPath, access);
+      return handleMkcol(request, env, logicalPath, access);
     case "PUT":
       return handlePut(request, env, logicalPath, access);
     case "GET":
@@ -27,10 +42,14 @@ export async function handleWebDavRequest(
     case "HEAD":
       return handleHead(env, logicalPath, access);
     case "DELETE":
-      return handleDelete(env, logicalPath, access);
+      return handleDelete(request, env, logicalPath, access);
     case "COPY":
     case "MOVE":
       return handleCopyMove(request, env, url, access, logicalPath);
+    case "LOCK":
+      return handleLock(request, env, url, access, logicalPath);
+    case "UNLOCK":
+      return handleUnlock(request, env, logicalPath, access);
     default:
       return methodNotAllowed();
   }
@@ -167,13 +186,18 @@ async function getResource(env: Env, logicalPath: string, access: AppAccess): Pr
   return null;
 }
 
-async function handleMkcol(env: Env, logicalPath: string, access: AppAccess): Promise<Response> {
+async function handleMkcol(request: Request, env: Env, logicalPath: string, access: AppAccess): Promise<Response> {
   const key = normalizeKey(logicalPath, true);
   if (!key) {
     return new Response("Cannot create the root collection.", {
       status: 405,
       headers: baseHeaders(),
     });
+  }
+
+  const lockResponse = await assertLockPermission(env, access, key, request);
+  if (lockResponse) {
+    return lockResponse;
   }
 
   const existing = await getResource(env, logicalPath, access);
@@ -213,6 +237,11 @@ async function handlePut(request: Request, env: Env, logicalPath: string, access
       status: 405,
       headers: baseHeaders(),
     });
+  }
+
+  const lockResponse = await assertLockPermission(env, access, key, request);
+  if (lockResponse) {
+    return lockResponse;
   }
 
   const parentKey = parentCollectionKey(key);
@@ -316,7 +345,7 @@ async function handleHead(env: Env, logicalPath: string, access: AppAccess): Pro
   return new Response(null, { status: 200, headers });
 }
 
-async function handleDelete(env: Env, logicalPath: string, access: AppAccess): Promise<Response> {
+async function handleDelete(request: Request, env: Env, logicalPath: string, access: AppAccess): Promise<Response> {
   const resource = await getResource(env, logicalPath, access);
   if (!resource) {
     return new Response("Not found.", { status: 404, headers: baseHeaders() });
@@ -329,15 +358,15 @@ async function handleDelete(env: Env, logicalPath: string, access: AppAccess): P
     });
   }
 
-  if (resource.kind === "file") {
-    await env.WEBDAV_BUCKET.delete(logicalToStorageKey(access, resource.key));
-  } else {
-    const keys = await collectStorageKeys(env, logicalCollectionToStoragePrefix(access, resource.key));
-    if (keys.length > 0) {
-      await deleteStorageKeysInBatches(env, keys);
-    }
+  const lockResponse =
+    resource.kind === "collection"
+      ? await assertRecursiveDeletePermission(env, access, resource.key, request)
+      : await assertLockPermission(env, access, resource.key, request);
+  if (lockResponse) {
+    return lockResponse;
   }
 
+  await deleteExistingResource(env, access, resource);
   return new Response(null, { status: 204, headers: baseHeaders() });
 }
 
@@ -385,6 +414,18 @@ async function handleCopyMove(
     });
   }
 
+  if (request.method === "MOVE") {
+    const sourceLockResponse = await assertLockPermission(env, access, source.key, request);
+    if (sourceLockResponse) {
+      return sourceLockResponse;
+    }
+  }
+
+  const destinationLockResponse = await assertLockPermission(env, access, destinationKey, request);
+  if (destinationLockResponse) {
+    return destinationLockResponse;
+  }
+
   const destinationParent = parentCollectionKey(destinationKey);
   if (!(await collectionExistsByKey(env, access, destinationParent))) {
     return new Response("Destination parent collection does not exist.", {
@@ -402,6 +443,13 @@ async function handleCopyMove(
         headers: baseHeaders(),
       });
     }
+    const destinationDeleteLockResponse =
+      existingDestination.kind === "collection"
+        ? await assertRecursiveDeletePermission(env, access, existingDestination.key, request)
+        : await assertLockPermission(env, access, existingDestination.key, request);
+    if (destinationDeleteLockResponse) {
+      return destinationDeleteLockResponse;
+    }
     await deleteExistingResource(env, access, existingDestination);
   }
 
@@ -412,6 +460,7 @@ async function handleCopyMove(
   }
 
   if (request.method === "MOVE") {
+    await moveLockRecords(env, access, source.key, destinationKey, source.kind === "collection");
     await deleteExistingResource(env, access, source);
   }
 
@@ -444,7 +493,7 @@ async function handlePropfind(
   }
 
   const depth = normalizeDepth(request.headers.get("depth"));
-  const responses: string[] = [buildPropfindResponse(url.origin, access.basePath, resource)];
+  const responses: string[] = [await buildPropfindResponse(env, url.origin, access.basePath, access, resource)];
 
   if (resource.kind === "collection" && depth > 0) {
     const listing = await env.WEBDAV_BUCKET.list({
@@ -457,7 +506,7 @@ async function handlePropfind(
       const key = collectionPrefix(storageToLogicalKey(access, childPrefix));
       if (!resource.key || key !== resource.key) {
         responses.push(
-          buildPropfindResponse(url.origin, access.basePath, {
+          await buildPropfindResponse(env, url.origin, access.basePath, access, {
             kind: "collection",
             key,
             marker: null,
@@ -472,7 +521,7 @@ async function handlePropfind(
         continue;
       }
       responses.push(
-        buildPropfindResponse(url.origin, access.basePath, {
+        await buildPropfindResponse(env, url.origin, access.basePath, access, {
           kind: "file",
           key: logicalKey,
           object,
@@ -497,11 +546,22 @@ function normalizeDepth(depthHeader: string | null): 0 | 1 {
   return depthHeader === "0" ? 0 : 1;
 }
 
-function buildPropfindResponse(origin: string, basePath: string, resource: Resource): string {
+async function buildPropfindResponse(
+  env: Env,
+  origin: string,
+  basePath: string,
+  access: AppAccess,
+  resource: Resource,
+): Promise<string> {
   const href = xmlEscape(encodeHref(origin, basePath, resource.key, resource.kind === "collection"));
   const props: string[] = [];
+  const activeLocks = await getApplicableLockDetails(env, access, resource.key);
 
   props.push(`<d:displayname>${xmlEscape(displayName(resource.key))}</d:displayname>`);
+  props.push(`<d:supportedlock>${getSupportedLockXml()}</d:supportedlock>`);
+  props.push(
+    `<d:lockdiscovery>${activeLocks.length === 0 ? "" : getLockDiscoveryXml(origin, basePath, activeLocks)}</d:lockdiscovery>`,
+  );
 
   if (resource.kind === "collection") {
     props.push("<d:resourcetype><d:collection/></d:resourcetype>");
@@ -531,6 +591,141 @@ function displayName(key: string): string {
   const clean = stripTrailingSlash(key);
   const parts = clean.split("/");
   return parts[parts.length - 1] ?? clean;
+}
+
+async function handleLock(
+  request: Request,
+  env: Env,
+  url: URL,
+  access: AppAccess,
+  logicalPath: string,
+): Promise<Response> {
+  const depthHeader = request.headers.get("depth");
+  const body = await request.text();
+  const requestedScope: LockDetails["scope"] = /<(?:[\w-]+:)?shared\b/i.test(body) ? "shared" : "exclusive";
+  if (body !== "" && !/<(?:[\w-]+:)?write\b/i.test(body)) {
+    return new Response("Bad Request.", { status: 400, headers: baseHeaders() });
+  }
+
+  const initialResource = await getResource(env, logicalPath, access);
+  const createdLockNullResource = !initialResource && body !== "";
+  let resourceKey = initialResource
+    ? initialResource.key
+    : normalizeKey(logicalPath, logicalPath.endsWith("/"));
+  let isCollection = initialResource ? initialResource.kind === "collection" : resourceKey === "";
+  const lockResponse = await assertLockPermission(env, access, resourceKey, request, {
+    ignoreSharedLocksOnTarget: body !== "" && requestedScope === "shared",
+  });
+  if (lockResponse) {
+    return lockResponse;
+  }
+
+  const refreshTarget = body === "" ? await findMatchingLock(env, access, resourceKey, request) : null;
+  let lockRootKey = refreshTarget?.resourceKey ?? resourceKey;
+  let currentLocks = await getExactLockDetails(env, access, lockRootKey);
+  const existingLock = refreshTarget?.lockDetails;
+
+  if (!initialResource) {
+    if (body === "") {
+      return new Response("Bad Request.", { status: 400, headers: baseHeaders() });
+    }
+    if (logicalPath.endsWith("/")) {
+      return new Response("Conflict.", { status: 409, headers: baseHeaders() });
+    }
+    const parentKey = parentCollectionKey(resourceKey);
+    if (!(await collectionExistsByKey(env, access, parentKey))) {
+      return new Response("Conflict.", { status: 409, headers: baseHeaders() });
+    }
+    await env.WEBDAV_BUCKET.put(logicalToStorageKey(access, resourceKey), "");
+    isCollection = false;
+    currentLocks = [];
+    lockRootKey = resourceKey;
+  } else if (refreshTarget) {
+    isCollection = lockRootKey === "" || lockRootKey.endsWith("/");
+  }
+
+  const depth = existingLock && depthHeader === null && body === "" ? existingLock.depth : determineLockDepth(isCollection, depthHeader);
+  if (!depth) {
+    return new Response("Bad Request.", { status: 400, headers: baseHeaders() });
+  }
+
+  if (!existingLock) {
+    if (requestedScope === "exclusive" && currentLocks.length > 0) {
+      return new Response("Locked.", { status: 423, headers: baseHeaders() });
+    }
+    if (requestedScope === "shared" && currentLocks.some((lock) => lock.scope === "exclusive")) {
+      return new Response("Locked.", { status: 423, headers: baseHeaders() });
+    }
+  }
+
+  const { timeout, expiresAt } = parseTimeout(request.headers.get("Timeout"));
+  const owner = extractLockOwner(body);
+  const lockDetails: LockDetails = {
+    token: existingLock?.token ?? crypto.randomUUID(),
+    owner: owner ?? existingLock?.owner,
+    scope: existingLock?.scope ?? requestedScope,
+    depth,
+    timeout,
+    expiresAt,
+    rootKey: lockRootKey,
+  };
+
+  const updatedLocks = existingLock
+    ? currentLocks.map((currentLock) => (currentLock.token === existingLock.token ? lockDetails : currentLock))
+    : [...currentLocks, lockDetails];
+  await putExactLockDetails(env, access, lockRootKey, updatedLocks);
+
+  const responseBody =
+    '<?xml version="1.0" encoding="utf-8"?>' +
+    `<d:prop xmlns:d="DAV:"><d:lockdiscovery>${getLockDiscoveryXml(url.origin, access.basePath, updatedLocks)}</d:lockdiscovery></d:prop>`;
+  return new Response(responseBody, {
+    status: existingLock || !createdLockNullResource ? 200 : 201,
+    headers: baseHeaders({
+      "Content-Type": 'application/xml; charset="utf-8"',
+      "Lock-Token": `<urn:uuid:${lockDetails.token}>`,
+      ...(existingLock
+        ? {}
+        : {
+            Location: encodeHref(url.origin, access.basePath, lockRootKey, isCollection),
+          }),
+    }),
+  });
+}
+
+async function handleUnlock(
+  request: Request,
+  env: Env,
+  logicalPath: string,
+  access: AppAccess,
+): Promise<Response> {
+  const resource = await getResource(env, logicalPath, access);
+  if (!resource) {
+    return new Response("Not found.", { status: 404, headers: baseHeaders() });
+  }
+
+  const lockToken = request.headers.get("Lock-Token");
+  if (!lockToken) {
+    return new Response("Bad Request.", { status: 400, headers: baseHeaders() });
+  }
+
+  const lockResponse = await assertLockPermission(env, access, resource.key, request);
+  if (lockResponse) {
+    return lockResponse;
+  }
+
+  const exactLocks = await getExactLockDetails(env, access, resource.key);
+  const normalizedToken = lockToken.trim().replace(/^<|>$/g, "").replace(/^(?:urn:uuid:|opaquelocktoken:)/, "");
+  if (!exactLocks.some((lock) => lock.token === normalizedToken)) {
+    return new Response("Conflict.", { status: 409, headers: baseHeaders() });
+  }
+
+  await putExactLockDetails(
+    env,
+    access,
+    resource.key,
+    exactLocks.filter((lock) => lock.token !== normalizedToken),
+  );
+  return new Response(null, { status: 204, headers: baseHeaders() });
 }
 
 async function collectionExistsByKey(env: Env, access: AppAccess, collectionKey: string): Promise<boolean> {
@@ -581,6 +776,7 @@ export async function deleteStorageKeysInBatches(env: Env, keys: string[]): Prom
 async function deleteExistingResource(env: Env, access: AppAccess, resource: Resource): Promise<void> {
   if (resource.kind === "file") {
     await env.WEBDAV_BUCKET.delete(logicalToStorageKey(access, resource.key));
+    await deleteLockRecordsForPath(env, access, resource.key, false);
     return;
   }
 
@@ -588,6 +784,11 @@ async function deleteExistingResource(env: Env, access: AppAccess, resource: Res
   if (keys.length > 0) {
     await deleteStorageKeysInBatches(env, keys);
   }
+  const markerKey = storageCollectionMarkerKey(access, resource.key);
+  if (markerKey) {
+    await env.WEBDAV_BUCKET.delete(markerKey);
+  }
+  await deleteLockRecordsForPath(env, access, resource.key, true);
 }
 
 async function copyFile(env: Env, access: AppAccess, sourceKey: string, destinationKey: string): Promise<void> {
